@@ -1,0 +1,123 @@
+asyncapi: 3.0.0
+info:
+  title: Open Prontuário — Eventos da Fila
+  version: 1.0.0
+  description: |
+    Eventos de domínio publicados pelo **MS Fila (Azure SQL)** a cada transição da
+    máquina de estados do `RegistroFila` e consumidos pela **Function Visão
+    Agregada** (subscription `agregador`). Mensagens que falharem 5 vezes vão para
+    a dead-letter queue e são tratadas por `EventoRejeitadoFunction`.
+
+    Minimização (LGPD): o evento **não** carrega nome, CPF, sintomas nem
+    `pacienteId`.
+  contact:
+    name: Ana Paula Alves, Artur Bertoni, Bernardo Plottegher, Luiz Fernando Grenteski
+defaultContentType: application/json
+servers:
+  azure:
+    host: '{namespace}.servicebus.windows.net'
+    protocol: amqp
+    protocolVersion: '1.0'
+    description: Azure Service Bus Standard
+    variables:
+      namespace:
+        default: sb-openprontuario
+  local:
+    host: servicebus-emulator:5672
+    protocol: amqp
+    description: Azure Service Bus Emulator (docker compose)
+channels:
+  eventosAtendimento:
+    address: eventos-atendimento
+    description: Tópico com todos os eventos de mudança de estado da fila.
+    messages:
+      pacienteACaminho: { $ref: '#/components/messages/PacienteACaminho' }
+      pacienteChegou: { $ref: '#/components/messages/PacienteChegou' }
+      prioridadeAlterada: { $ref: '#/components/messages/PrioridadeAlterada' }
+      atendimentoIniciado: { $ref: '#/components/messages/AtendimentoIniciado' }
+      pacienteRemovido: { $ref: '#/components/messages/PacienteRemovido' }
+  agregadorDlq:
+    address: eventos-atendimento/Subscriptions/agregador/$DeadLetterQueue
+    description: Dead-letter queue da subscription `agregador` (maxDeliveryCount = 5).
+    messages:
+      eventoRejeitado: { $ref: '#/components/messages/EventoFila' }
+operations:
+  publicarEventoFila:
+    action: send
+    channel: { $ref: '#/channels/eventosAtendimento' }
+    summary: MS Fila publica após salvar o registro (AvisarChegada, ConfirmarChegada, AlterarPrioridade, IniciarAtendimento, RemoverDaFila).
+  consumirEventoFila:
+    action: receive
+    channel: { $ref: '#/channels/eventosAtendimento' }
+    summary: EventoFilaFunction (subscription agregador) recalcula a visão agregada da unidade.
+  consumirEventoRejeitado:
+    action: receive
+    channel: { $ref: '#/channels/agregadorDlq' }
+    summary: EventoRejeitadoFunction registra a falha e emite telemetria.
+components:
+  messages:
+    EventoFila:
+      name: EventoFilaMessage
+      title: Evento de fila (genérico)
+      contentType: application/json
+      correlationId:
+        location: $message.header#/correlationId
+      headers: { $ref: '#/components/schemas/PropriedadesAmqp' }
+      payload: { $ref: '#/components/schemas/EventoFilaMessage' }
+    PacienteACaminho:
+      name: PACIENTE_A_CAMINHO
+      title: Paciente a caminho
+      summary: "→ A_CAMINHO (statusAnterior = null). Incrementa totalACaminho."
+      headers: { $ref: '#/components/schemas/PropriedadesAmqp' }
+      payload: { $ref: '#/components/schemas/EventoFilaMessage' }
+      examples:
+        - payload: { eventoId: 1b0e7c52-1d0a-4c84-9a77-0f0e2b6c9a10, tipo: PACIENTE_A_CAMINHO, registroId: 3c9a7f20-5b1e-4d8a-9f6c-2e7b1a4d8c55, unidadeId: upa-01, statusAnterior: null, statusAtual: A_CAMINHO, prioridade: MUITO_URGENTE, ocorridoEm: '2026-10-14T08:05:00-03:00', versao: 1 }
+    PacienteChegou:
+      name: PACIENTE_CHEGOU
+      title: Paciente chegou
+      summary: "A_CAMINHO → AGUARDANDO. Decrementa totalACaminho, incrementa totalPresente."
+      headers: { $ref: '#/components/schemas/PropriedadesAmqp' }
+      payload: { $ref: '#/components/schemas/EventoFilaMessage' }
+      examples:
+        - payload: { eventoId: 8f2c1e7a-4b6d-4c1f-9a3e-2d5b7c9e1f04, tipo: PACIENTE_CHEGOU, registroId: 3c9a7f20-5b1e-4d8a-9f6c-2e7b1a4d8c55, unidadeId: upa-01, statusAnterior: A_CAMINHO, statusAtual: AGUARDANDO, prioridade: URGENTE, ocorridoEm: '2026-10-14T08:15:32-03:00', versao: 1 }
+    PrioridadeAlterada:
+      name: PRIORIDADE_ALTERADA
+      title: Prioridade alterada
+      summary: "Status inalterado (A_CAMINHO ou AGUARDANDO). Recalcula indicadores."
+      headers: { $ref: '#/components/schemas/PropriedadesAmqp' }
+      payload: { $ref: '#/components/schemas/EventoFilaMessage' }
+    AtendimentoIniciado:
+      name: ATENDIMENTO_INICIADO
+      title: Atendimento iniciado
+      summary: "AGUARDANDO → EM_ATENDIMENTO. Decrementa totalPresente e atualiza tempoMedioEsperaMin."
+      headers: { $ref: '#/components/schemas/PropriedadesAmqp' }
+      payload: { $ref: '#/components/schemas/EventoFilaMessage' }
+    PacienteRemovido:
+      name: PACIENTE_REMOVIDO
+      title: Paciente removido
+      summary: "A_CAMINHO | AGUARDANDO | EM_ATENDIMENTO → FINALIZADO. Ajusta o contador do status anterior."
+      headers: { $ref: '#/components/schemas/PropriedadesAmqp' }
+      payload: { $ref: '#/components/schemas/EventoFilaMessage' }
+  schemas:
+    PropriedadesAmqp:
+      type: object
+      description: Propriedades da mensagem do Service Bus
+      required: [messageId, subject, correlationId]
+      properties:
+        messageId: { type: string, description: "= eventoId (detecção de duplicatas, janela de 10 min)" }
+        subject: { type: string, description: "= tipo" }
+        correlationId: { type: string, description: "X-Correlation-Id da requisição de origem" }
+        contentType: { type: string, const: application/json }
+    EventoFilaMessage:
+      type: object
+      required: [eventoId, tipo, registroId, unidadeId, statusAtual, prioridade, ocorridoEm, versao]
+      properties:
+        eventoId: { type: string, format: uuid }
+        tipo: { type: string, enum: [PACIENTE_A_CAMINHO, PACIENTE_CHEGOU, PRIORIDADE_ALTERADA, ATENDIMENTO_INICIADO, PACIENTE_REMOVIDO] }
+        registroId: { type: string }
+        unidadeId: { type: string }
+        statusAnterior: { type: [string, 'null'], enum: [A_CAMINHO, AGUARDANDO, EM_ATENDIMENTO, FINALIZADO, null] }
+        statusAtual: { type: string, enum: [A_CAMINHO, AGUARDANDO, EM_ATENDIMENTO, FINALIZADO] }
+        prioridade: { type: string, enum: [EMERGENCIA, MUITO_URGENTE, URGENTE, POUCO_URGENTE, NAO_URGENTE] }
+        ocorridoEm: { type: string, format: date-time }
+        versao: { type: integer, const: 1 }
