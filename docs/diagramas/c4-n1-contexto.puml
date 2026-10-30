@@ -1,0 +1,24 @@
+@startuml c4-n1-contexto
+!include <C4/C4_Context>
+HIDE_STEREOTYPE()
+title C4 Nível 1 — Contexto do Open Prontuário
+
+Person(paciente, "Paciente", "Consulta UPAs próximas, avisa a chegada e controla o compartilhamento do prontuário")
+Person(atendente, "Atendente / Recepção", "Gerencia a fila da UPA e confirma chegadas")
+Person(profissional, "Profissional de Saúde", "Consulta o prontuário autorizado e registra atendimentos")
+Person(gestor, "Gestor da Unidade", "Indicadores, auditoria e cadastros")
+
+System(sistema, "Open Prontuário", "Filas por prioridade clínica e compartilhamento consentido de prontuários")
+
+System_Ext(entra, "Microsoft Entra ID", "Identidade OAuth2/OIDC (modo entra)")
+System_Ext(atlas, "MongoDB Atlas", "Banco de documentos gerenciado (M0)")
+System_Ext(osm, "OpenStreetMap", "Tiles do mapa no navegador")
+
+Rel_D(paciente, sistema, "Avisa chegada, sintomas, consentimento", "HTTPS")
+Rel_D(atendente, sistema, "Confirma chegada, prioriza, encerra", "HTTPS")
+Rel_D(profissional, sistema, "Consulta prontuário, inicia atendimento", "HTTPS")
+Rel_D(gestor, sistema, "Indicadores, auditoria, CRUD", "HTTPS")
+Rel_R(sistema, entra, "Valida tokens", "OIDC/JWKS")
+Rel_D(sistema, atlas, "Prontuários e visão agregada", "Mongo Wire/TLS")
+Rel_L(sistema, osm, "Mapa (somente no navegador)", "HTTPS")
+@enduml

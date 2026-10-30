@@ -1,0 +1,36 @@
+@startuml seq-prontuario-consentimento
+title Consulta ao prontuário com lotação, consentimento e auditoria fail-closed (RF12, RF15)
+hide footbox
+autonumber
+skinparam maxMessageSize 180
+actor Profissional
+participant "BFF" as BFF
+participant "MS Prontuário\nConsultarProntuarioUseCase" as UC
+participant "LotacaoPort\n«LotacaoHttpAdapter»" as L
+participant "MS Fila" as F
+database "Atlas db prontuario" as M
+
+Profissional -> BFF : GET /api/prontuarios/pac-101?unidadeId=upa-01
+BFF -> UC : X-User-Id = usr-prof-03
+UC -> L : estaLotado(usr-prof-03, upa-01)
+L -> F : GET /internal/lotacoes/verificar
+alt MS Fila indisponível
+  UC --> BFF : 503 DEPENDENCIA_INDISPONIVEL (nunca libera sem verificar)
+else não lotado
+  UC --> BFF : 403 SEM_PERMISSAO
+else lotado
+  UC -> M : consentimento ativo (pac-101, upa-01)
+  alt ausente, expirado ou revogado
+    UC --> BFF : 403 CONSENTIMENTO_AUSENTE
+  else Consentimento.estaValido(agora)
+    UC -> M : lê prontuário + atendimentos
+    UC -> M : insere LogAuditoria (consentimentoId)
+    alt falha ao gravar a auditoria
+      UC --> BFF : 503 — prontuário NÃO é devolvido
+    else gravado
+      UC --> BFF : 200 prontuário
+    end
+  end
+end
+BFF --> Profissional : resposta (problem+json em erro)
+@enduml

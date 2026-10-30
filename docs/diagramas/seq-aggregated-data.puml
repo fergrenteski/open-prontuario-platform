@@ -1,0 +1,37 @@
+@startuml seq-aggregated-data
+title GET /api/aggregated-data — agregação no BFF (RF08, RF12, RF18)
+hide footbox
+autonumber
+skinparam maxMessageSize 180
+actor "Atendente" as U
+participant "Microfrontend" as SPA
+participant "API Gateway\n(APIM)" as GW
+participant "BFF\nObterDadosAgregadosUseCase" as BFF
+participant "MS Fila\n(Azure SQL)" as F
+participant "MS Prontuário\n(MongoDB)" as P
+participant "Function\nVisão Agregada" as FN
+
+U -> SPA : abre a fila da UPA
+SPA -> GW : GET /api/aggregated-data?unidadeId=upa-01\nAuthorization: Bearer JWT
+GW -> BFF : encaminha (subscription key + rate limit ok)
+BFF -> BFF : valida JWT e perfil; gera X-Correlation-Id
+par chamadas em paralelo (Promise.allSettled, timeout por fonte)
+  BFF -> F : GET /unidades/upa-01 e GET /fila/upa-01
+  F --> BFF : unidade + fila ordenada por prioridade
+else
+  BFF -> P : GET /internal/consentimentos/validos?unidadeId=upa-01
+  P --> BFF : pacienteIds com consentimento válido
+else
+  BFF -> FN : GET /api/visao-agregada/upa-01
+  FN --> BFF : totais + nivelCongestionamento
+end
+BFF -> BFF : marca prontuarioAutorizado,\nmonta meta.fontes/falhas/avisos
+alt alguma fonte falhou
+  BFF --> GW : 200 { ..., meta.degraded = true }
+else todas falharam
+  BFF --> GW : 502 AGREGACAO_FALHOU
+else sucesso
+  BFF --> GW : 200 JSON único
+end
+GW --> SPA : resposta
+@enduml

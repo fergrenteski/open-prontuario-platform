@@ -1,0 +1,35 @@
+@startuml seq-aviso-chegada-evento
+title Aviso de chegada → evento → recálculo assíncrono (RF03, RF04, RF05, RF17, RF18)
+hide footbox
+autonumber
+skinparam maxMessageSize 180
+actor Paciente
+participant "BFF\nAvisarChegadaUseCase" as BFF
+participant "MS Fila\nAvisarChegadaUseCase" as F
+database "Azure SQL" as SQL
+queue "Service Bus\neventos-atendimento" as SB
+participant "MS Prontuário\nConcederConsentimentoUseCase" as P
+participant "Function\nEventoFilaFunction" as FN
+database "Atlas db visao" as V
+
+Paciente -> BFF : POST /api/fila/upa-01/aviso-chegada\n{sintomas, autorizarProntuario: true}
+BFF -> F : POST /fila/upa-01/aviso-chegada (X-User-*)
+F -> F : ClassificacaoPreliminarPolicy\nRegistroFila.avisar() → A_CAMINHO
+F -> SQL : INSERT registros_fila
+F -> SB : PACIENTE_A_CAMINHO (messageId = eventoId)
+F --> BFF : 201 registro
+BFF -> P : POST /consentimentos {unidadeId}
+P --> BFF : 201 (ou 409 = já autorizado)
+BFF --> Paciente : 201 registro + prontuarioAutorizado
+== assíncrono ==
+SB -> FN : entrega (subscription agregador)
+FN -> V : eventoId já processado?
+alt novo
+  FN -> F : GET /internal/fila/upa-01/snapshot
+  FN -> FN : VisaoAgregada.recalcular(...)
+  FN -> V : upsert visao_agregada + marca eventos_processados (TTL 24 h)
+else repetido
+  FN -> FN : ignora (idempotência)
+end
+note over SB, FN : falhou 5 vezes → DLQ → EventoRejeitadoFunction\ngrava eventos_rejeitados e emite telemetria
+@enduml

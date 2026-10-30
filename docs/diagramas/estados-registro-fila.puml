@@ -1,0 +1,14 @@
+@startuml estados-registro-fila
+title Ciclo de vida do RegistroFila (MS Fila)
+hide empty description
+[*] --> A_CAMINHO : POST /fila/{unidadeId}/aviso-chegada\nevento PACIENTE_A_CAMINHO
+A_CAMINHO --> AGUARDANDO : POST .../confirmar-chegada\nevento PACIENTE_CHEGOU
+AGUARDANDO --> EM_ATENDIMENTO : POST .../iniciar-atendimento\nevento ATENDIMENTO_INICIADO
+EM_ATENDIMENTO --> FINALIZADO : DELETE /fila/{id}?motivo=ATENDIDO\nevento PACIENTE_REMOVIDO
+A_CAMINHO --> FINALIZADO : motivo=DESISTENCIA
+AGUARDANDO --> FINALIZADO : motivo=DESISTENCIA | ENCAMINHADO
+A_CAMINHO --> A_CAMINHO : PATCH .../prioridade\nPRIORIDADE_ALTERADA
+AGUARDANDO --> AGUARDANDO : PATCH .../prioridade\nPRIORIDADE_ALTERADA
+FINALIZADO --> [*]
+note right of FINALIZADO : qualquer outra transição →\nTransicaoInvalidaException → 409
+@enduml

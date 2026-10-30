@@ -1,0 +1,37 @@
+@startuml c4-n3-ms-prontuario
+!include <C4/C4_Component>
+HIDE_STEREOTYPE()
+title C4 Nível 3 — Componentes do MS Prontuário (MongoDB)
+
+Container(bff, "BFF")
+Container_Boundary(ms, "MS Prontuário — Spring Boot") {
+  Boundary(api, "api") {
+    Component(ctrl, "ProntuarioController, ConsentimentoController,\nAuditoriaController, InternoController", "Spring Web")
+  }
+  Boundary(app, "application/<feature>/<caso-de-uso>") {
+    Component(ucp, "prontuario: ConsultarProntuario (fail-closed),\nConsultarProprio, Criar, Atualizar, Remover,\nRegistrarAtendimento", "UseCases")
+    Component(ucc, "consentimento: Conceder, Listar, Renovar,\nRevogar, ListarValidosPorUnidade\nauditoria: ListarAuditoria", "UseCases")
+    Component(portas, "Portas", "interfaces", "ProntuarioRepository, AtendimentoRepository,\nConsentimentoRepository, LogAuditoriaRepository\n(append-only), LotacaoPort")
+  }
+  Boundary(dom, "domain") {
+    Component(ent, "Prontuario, Atendimento,\nConsentimento.estaValido(agora),\nLogAuditoria.registrar(...)", "Java puro")
+  }
+  Boundary(inf, "infrastructure") {
+    Component(mongo, "*RepositoryAdapter", "Spring Data MongoDB")
+    Component(lot, "LotacaoHttpAdapter", "RestClient", "GET /internal/lotacoes/*")
+  }
+}
+ContainerDb(atlas, "MongoDB Atlas", "db prontuario")
+Container(msfila, "MS Fila")
+
+Rel_D(bff, ctrl, "REST")
+Rel_D(ctrl, ucp, "executar()")
+Rel_D(ctrl, ucc, "executar()")
+Rel_D(ucp, portas, "usa")
+Rel_D(ucc, portas, "usa")
+Rel_R(ucp, ent, "usa")
+Rel_U(mongo, portas, "implementa")
+Rel_U(lot, portas, "implementa")
+Rel_D(mongo, atlas, "Mongo Wire")
+Rel_D(lot, msfila, "REST")
+@enduml

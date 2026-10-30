@@ -1,0 +1,43 @@
+@startuml der-sql
+title DER — Azure SQL (MS Fila)
+hide circle
+skinparam linetype ortho
+entity "unidades" as u {
+  * id : NVARCHAR(64) <<PK>>
+  --
+  nome : NVARCHAR(120)
+  tipo : NVARCHAR(3) (UBS, UPA)
+  latitude : FLOAT
+  longitude : FLOAT
+}
+entity "lotacoes" as l {
+  * id : NVARCHAR(64) <<PK>>
+  --
+  usuario_id : NVARCHAR(64)
+  unidade_id : NVARCHAR(64) <<FK>>
+  perfil : NVARCHAR(20)
+  UNIQUE(usuario_id, unidade_id)
+}
+entity "pacientes" as p {
+  * id : NVARCHAR(64) <<PK>> (oid)
+  --
+  nome : NVARCHAR(120)
+  cpf : NVARCHAR(11)
+  cartao_sus : NVARCHAR(15)
+}
+entity "registros_fila" as r {
+  * id : NVARCHAR(64) <<PK>>
+  --
+  paciente_id : <<FK>>
+  unidade_id : <<FK>>
+  prioridade, status, motivo_saida
+  sintomas
+  tempo_estimado_chegada_min : INT
+  horario_aviso, horario_chegada,
+  horario_inicio_atendimento : DATETIMEOFFSET
+  UNIQUE(paciente_id, unidade_id) WHERE status <> 'FINALIZADO'
+}
+u ||--o{ l
+u ||--o{ r
+p ||--o{ r
+@enduml

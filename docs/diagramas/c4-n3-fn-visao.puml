@@ -1,0 +1,48 @@
+@startuml c4-n3-fn-visao
+!include <C4/C4_Component>
+HIDE_STEREOTYPE()
+title C4 Nível 3 — Componentes da Function Visão Agregada
+
+ContainerQueue(bus, "Service Bus", "subscription agregador + DLQ")
+Container(bff, "BFF")
+Container_Boundary(fn, "Function — Azure Functions Java 17") {
+  Boundary(api, "api (gatilhos)") {
+    Component(t1, "EventoFilaFunction", "Service Bus Trigger")
+    Component(t2, "EventoRejeitadoFunction", "Trigger da DLQ")
+    Component(t3, "VisaoAgregadaHttpFunction\nHealthFunction", "HTTP Trigger")
+  }
+  Boundary(app, "application/<feature>/<caso-de-uso>") {
+    Component(uc1, "RecalcularVisaoAgregadaUseCase", "idempotente")
+    Component(uc2, "ConsultarVisaoAgregadaUseCase", "")
+    Component(uc3, "RegistrarEventoRejeitadoUseCase", "")
+    Component(portas, "Portas", "interfaces", "VisaoAgregadaRepository, EventoProcessadoRepository,\nEventoRejeitadoRepository, RegistroFilaLeituraPort,\nTelemetriaPort")
+  }
+  Boundary(dom, "domain") {
+    Component(va, "VisaoAgregada.recalcular(...)\nNivelCongestionamento", "Java puro")
+  }
+  Boundary(inf, "infrastructure") {
+    Component(mongo, "Mongo adapters", "driver síncrono")
+    Component(http, "MsFilaHttpAdapter", "java.net.http")
+    Component(tel, "Telemetria via logs", "ExecutionContext")
+  }
+  Boundary(boot, "bootstrap") {
+    Component(comp, "Composição", "singleton", "única dependência permitida de api")
+  }
+}
+ContainerDb(atlas, "MongoDB Atlas", "db visao")
+Container(msfila, "MS Fila", "/internal/fila/{id}/snapshot")
+
+Rel_D(bus, t1, "AMQP")
+Rel_D(bus, t2, "AMQP (DLQ)")
+Rel_D(bff, t3, "HTTPS")
+Rel_D(t1, uc1, "executar()")
+Rel_D(t3, uc2, "executar()")
+Rel_D(t2, uc3, "executar()")
+Rel_D(uc1, portas, "usa")
+Rel_R(uc1, va, "recalcular()")
+Rel_U(mongo, portas, "implementa")
+Rel_U(http, portas, "implementa")
+Rel_U(tel, portas, "implementa")
+Rel_D(mongo, atlas, "Mongo Wire")
+Rel_D(http, msfila, "REST")
+@enduml

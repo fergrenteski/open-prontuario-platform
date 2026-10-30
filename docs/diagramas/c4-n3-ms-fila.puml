@@ -1,0 +1,43 @@
+@startuml c4-n3-ms-fila
+!include <C4/C4_Component>
+HIDE_STEREOTYPE()
+title C4 Nível 3 — Componentes do MS Fila (Azure SQL)
+
+Container(bff, "BFF")
+Container(clientes, "Function e MS Prontuário", "rotas /internal/**")
+Container_Boundary(ms, "MS Fila — Spring Boot") {
+  Boundary(api, "api") {
+    Component(ctrl, "UnidadeController, LotacaoController,\nFilaController, InternoController", "Spring Web")
+    Component(flt, "InternalKeyFilter, CorrelationIdFilter,\nRestExceptionHandler", "Spring Web", "RFC 9457")
+  }
+  Boundary(app, "application/<feature>/<caso-de-uso>") {
+    Component(ucfila, "fila: AvisarChegada, ConfirmarChegada,\nAlterarPrioridade, IniciarAtendimento,\nRemoverDaFila, ListarFila, SnapshotFila", "UseCases")
+    Component(ucuni, "unidade e lotacao: CRUD,\nListarProximas, ListarMinhas, VerificarLotacao", "UseCases")
+    Component(portas, "Portas", "interfaces", "~*Repository, EventPublisherPort")
+  }
+  Boundary(dom, "domain") {
+    Component(ent, "RegistroFila (máquina de estados),\nUnidadeSaude (Haversine), Lotacao, Paciente,\nOrdenacaoFilaPolicy, ClassificacaoPreliminarPolicy,\nEventoDominioFila", "Java puro")
+  }
+  Boundary(inf, "infrastructure") {
+    Component(jpa, "*RepositoryAdapter", "Spring Data JPA + Flyway")
+    Component(pub, "ServiceBusEventPublisherAdapter", "azure-messaging-servicebus")
+  }
+  Boundary(boot, "bootstrap") {
+    Component(cfg, "UseCaseConfig", "@Configuration", "composition root")
+  }
+}
+ContainerDb(sql, "Azure SQL")
+ContainerQueue(bus, "Service Bus", "eventos-atendimento")
+
+Rel_D(bff, ctrl, "REST")
+Rel_D(clientes, ctrl, "REST interno")
+Rel_D(ctrl, ucfila, "executar()")
+Rel_D(ctrl, ucuni, "executar()")
+Rel_D(ucfila, portas, "usa")
+Rel_D(ucuni, portas, "usa")
+Rel_R(ucfila, ent, "usa")
+Rel_U(jpa, portas, "implementa")
+Rel_U(pub, portas, "implementa")
+Rel_D(jpa, sql, "TDS")
+Rel_D(pub, bus, "AMQP")
+@enduml

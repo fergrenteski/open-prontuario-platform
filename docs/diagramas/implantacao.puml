@@ -1,0 +1,46 @@
+@startuml implantacao
+title Implantação na Azure (e serviços externos)
+skinparam defaultTextAlignment center
+node "Navegador\n(desktop ou celular)" as nav
+node "GitHub" as gh {
+  artifact "Actions (CI)" as ci
+}
+node "Docker Hub" as dh {
+  artifact "<user>/pjbl-bff\n<user>/pjbl-ms-fila-sql\n<user>/pjbl-ms-prontuario-mongo" as imgs
+}
+rectangle "Resource group rg-openprontuario" {
+  node "Static Web Apps (Free)" as swa {
+    artifact "frontend (build Vite)" as afront
+  }
+  node "API Management (Consumption)" as apim
+  node "Container Apps Environment" as cae {
+    artifact "ca-bff" as cabff
+    artifact "ca-ms-fila-sql" as cafila
+    artifact "ca-ms-prontuario-mongo" as capront
+  }
+  node "Functions (Linux Consumption Y1)" as func {
+    artifact "fn-visao-agregada" as afn
+  }
+  queue "Service Bus Standard\neventos-atendimento / agregador / DLQ" as sb
+  database "Azure SQL (oferta gratuita)\nopenprontuario" as sql
+  node "Application Insights\n+ Log Analytics" as ai
+}
+cloud "MongoDB Atlas M0" as atlas
+nav --> swa : HTTPS
+nav --> apim : HTTPS /api/*
+apim --> cabff : HTTPS
+cabff --> cafila
+cabff --> capront
+cabff --> func
+cafila --> sql
+cafila --> sb : AMQP
+sb --> func : AMQP
+func --> cafila : snapshot
+capront --> cafila : lotação
+capront --> atlas
+func --> atlas
+ci ..> dh : docker push
+dh ..> cae : pull das imagens
+cae ..> ai
+func ..> ai
+@enduml

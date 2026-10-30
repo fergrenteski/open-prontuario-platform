@@ -1,0 +1,43 @@
+@startuml c4-n3-bff
+!include <C4/C4_Component>
+HIDE_STEREOTYPE()
+title C4 Nível 3 — Componentes do BFF (Clean Architecture + Vertical Slice)
+
+Container(spa, "Microfrontend", "React")
+Container_Boundary(bff, "BFF — NestJS") {
+  Boundary(api, "api") {
+    Component(ctrl, "Controllers por feature", "NestJS", "aggregated-data, fila, unidades,\nprontuarios, consentimentos,\nauditoria, lotacoes, auth")
+    Component(guards, "JwtAuthGuard + RolesGuard", "NestJS", "x-roles do contrato")
+    Component(filtro, "Filtro problem+json\n+ Correlation-Id", "NestJS")
+  }
+  Boundary(app, "application/<feature>/<caso-de-uso>") {
+    Component(agg, "ObterDadosAgregados", "UseCase", "Promise.allSettled + timeout\n+ degradação graciosa")
+    Component(aviso, "AvisarChegada", "UseCase", "MS Fila + consentimento")
+    Component(outros, "ListarFila, ListarProximas,\nEncaminharRequisicao, EmitirDevToken", "UseCases")
+    Component(portas, "Portas", "interfaces", "MsFilaPort, MsProntuarioPort,\nVisaoAgregadaPort, UpstreamPort,\nTokenVerifierPort")
+  }
+  Boundary(dom, "domain") {
+    Component(regras, "Regras puras", "TypeScript", "montagem do AggregatedData,\nprontuarioAutorizado, personas")
+  }
+  Boundary(inf, "infrastructure") {
+    Component(http, "Clientes HTTP", "fetch + AbortSignal.timeout", "implementam as portas")
+    Component(jwt, "Verificadores JWT", "jose", "HS256 (dev) / JWKS Entra")
+  }
+}
+Container(msfila, "MS Fila", "Spring Boot")
+Container(mspront, "MS Prontuário", "Spring Boot")
+Container(fn, "Function", "Azure Functions")
+
+Rel_D(spa, ctrl, "HTTPS via APIM")
+Rel_D(ctrl, agg, "executar()")
+Rel_D(ctrl, aviso, "executar()")
+Rel_D(ctrl, outros, "executar()")
+Rel_D(agg, portas, "usa")
+Rel_D(aviso, portas, "usa")
+Rel_R(agg, regras, "usa")
+Rel_U(http, portas, "implementa")
+Rel_U(jwt, portas, "implementa")
+Rel_D(http, msfila, "REST")
+Rel_D(http, mspront, "REST")
+Rel_D(http, fn, "REST")
+@enduml

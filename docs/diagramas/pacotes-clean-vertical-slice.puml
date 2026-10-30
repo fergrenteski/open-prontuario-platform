@@ -1,0 +1,35 @@
+@startuml pacotes-clean-vertical-slice
+title Clean Architecture + Vertical Slice (igual nos 3 serviços Java; espelhado no BFF e no frontend)
+set separator none
+skinparam packageStyle folder
+package "bootstrap «composition root»" as B #F3F3F3
+package "api «adapters de entrada»" as A #E8F1FB {
+  rectangle "fila" as a1
+  rectangle "unidade" as a2
+  rectangle "..." as a3
+}
+package "infrastructure «adapters de saída»" as I #E8F1FB {
+  rectangle "persistence" as i1
+  rectangle "messaging / http" as i2
+}
+package "application «casos de uso por feature»" as P #DCEBFA {
+  package "fila" {
+    rectangle "avisarchegada\nAvisarChegadaUseCase\nAvisarChegadaCommand" as s1
+    rectangle "confirmarchegada" as s2
+    rectangle "ports\n(RegistroFilaRepository,\nEventPublisherPort)" as s3 #FFFFFF
+  }
+  package "unidade" {
+    rectangle "listarproximas" as s4
+    rectangle "ports" as s5 #FFFFFF
+  }
+}
+package "domain «Java/TS puro»" as D #FFF4CC
+B ..> A
+B ..> I
+B ..> P
+A ..> P : <<use>>
+I ..|> s3 : <<implementa>>
+P ..> D : <<use>>
+A -[hidden]- I
+note bottom of D : api e infrastructure não se conhecem;\nregras verificadas por ArchUnit / dependency-cruiser
+@enduml

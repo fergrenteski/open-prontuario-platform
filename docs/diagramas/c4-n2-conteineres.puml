@@ -1,0 +1,37 @@
+@startuml c4-n2-conteineres
+!include <C4/C4_Container>
+HIDE_STEREOTYPE()
+LAYOUT_TOP_DOWN()
+title C4 Nível 2 — Contêineres (arquitetura PJBL)
+
+Person(usuarios, "Paciente, Atendente,\nProfissional e Gestor")
+
+System_Boundary(azure, "Microsoft Azure") {
+  Container(spa, "Microfrontend", "React 19 + Vite / Static Web Apps", "Áreas Paciente, Atendente e Gestor; fala só com o gateway")
+  Container(apim, "API Gateway", "Azure API Management (Consumption)", "Roteamento /api/*, subscription key, rate limit, CORS")
+  Container(bff, "BFF", "Node.js + NestJS / Container Apps", "JWT, perfis, proxy CRUD, orquestração e GET /aggregated-data")
+  Container(msfila, "MS Fila", "Java 17 + Spring Boot / Container Apps", "Unidades, lotações, fila e máquina de estados")
+  ContainerDb(sql, "Azure SQL Database", "Oferta gratuita (serverless)", "unidades, lotacoes, pacientes, registros_fila")
+  ContainerQueue(bus, "Service Bus", "Standard", "Tópico eventos-atendimento, subscription agregador + DLQ")
+  Container(fn, "Function Visão Agregada", "Java 17 / Azure Functions Consumption", "Service Bus Trigger, DLQ Trigger e HTTP Trigger")
+  Container(mspront, "MS Prontuário", "Java 17 + Spring Boot / Container Apps", "Prontuários, consentimentos (Open Finance) e auditoria")
+  Container(ins, "Application Insights", "Log Analytics", "Telemetria e alertas")
+}
+ContainerDb_Ext(atlas, "MongoDB Atlas (M0)", "MongoDB", "db prontuario e db visao")
+
+Rel_D(usuarios, spa, "Usa", "HTTPS")
+Rel_D(spa, apim, "REST/JSON + JWT", "HTTPS")
+Rel_D(apim, bff, "Encaminha /api/*", "HTTPS")
+Rel_D(bff, msfila, "REST + X-Internal-Key", "HTTPS")
+Rel_D(bff, mspront, "REST + X-Internal-Key", "HTTPS")
+Rel_D(bff, fn, "HTTP Trigger", "HTTPS")
+Rel_D(msfila, sql, "JPA/Flyway", "TDS/TLS")
+Rel_R(msfila, bus, "Publica eventos", "AMQP")
+Rel_D(bus, fn, "Aciona", "AMQP")
+Rel_L(fn, msfila, "GET /internal/fila/{id}/snapshot", "HTTPS")
+Rel_L(mspront, msfila, "Verifica lotação", "HTTPS")
+Rel_D(mspront, atlas, "db prontuario", "Mongo Wire/TLS")
+Rel_D(fn, atlas, "db visao", "Mongo Wire/TLS")
+Rel(fn, ins, "Logs/telemetria")
+Rel(bff, ins, "Logs")
+@enduml
