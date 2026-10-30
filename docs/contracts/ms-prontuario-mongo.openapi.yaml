@@ -1,0 +1,347 @@
+openapi: 3.0.3
+info:
+  title: Open Prontuário — MS Prontuário (MongoDB)
+  version: 1.0.0
+  description: |
+    Microserviço de **Prontuários, Atendimentos, Consentimentos e Auditoria**.
+    Persistência em MongoDB Atlas. Consentimento no modelo Open Finance
+    (por unidade, com prazo, revogável) e auditoria *fail-closed* de todo acesso
+    de terceiros ao prontuário.
+
+    A verificação de lotação é feita pela porta `LotacaoPort`, cujo adapter HTTP
+    chama `GET /internal/lotacoes/verificar` e `GET /internal/lotacoes` do MS Fila.
+
+    Todas as rotas exigem `X-Internal-Key`; as rotas de usuário exigem também
+    `X-User-Id` e `X-User-Roles` (ver `CONVENCOES.md`).
+  license: { name: Uso acadêmico - PUCPR }
+  contact:
+    name: Ana Paula Alves, Artur Bertoni, Bernardo Plottegher, Luiz Fernando Grenteski
+servers:
+  - url: http://localhost:8082
+    description: Local
+security:
+  - internalKey: []
+tags:
+  - name: Prontuario
+  - name: Consentimento
+  - name: Auditoria
+  - name: Interno
+paths:
+  /prontuarios:
+    post:
+      tags: [Prontuario]
+      operationId: criarProntuario
+      summary: Cadastra o prontuário de um paciente (GESTOR — carga administrativa)
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/UserRoles'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CriarProntuarioRequest' }
+      responses:
+        '201':
+          description: Criado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Prontuario' }
+        '400': { $ref: '#/components/responses/Problema' }
+        '403': { $ref: '#/components/responses/Problema' }
+        '409':
+          description: "Paciente já possui prontuário (PRONTUARIO_DUPLICADO)"
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problema' }
+  /prontuarios/me:
+    get:
+      tags: [Prontuario]
+      operationId: consultarProprioProntuario
+      summary: RF06 — Prontuário do próprio paciente (sem consentimento, sem auditoria de terceiros)
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/UserRoles'
+      responses:
+        '200':
+          description: Prontuário
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Prontuario' }
+        '404': { $ref: '#/components/responses/Problema' }
+  /prontuarios/{pacienteId}:
+    parameters:
+      - { name: pacienteId, in: path, required: true, schema: { type: string, example: pac-101 } }
+      - $ref: '#/components/parameters/UserId'
+      - $ref: '#/components/parameters/UserRoles'
+    get:
+      tags: [Prontuario]
+      operationId: consultarProntuario
+      summary: RF12/RF15 — Consulta por profissional lotado com consentimento válido; grava auditoria (fail-closed)
+      parameters:
+        - { name: unidadeId, in: query, required: true, schema: { type: string, example: upa-01 } }
+      responses:
+        '200':
+          description: Prontuário (o acesso foi auditado)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Prontuario' }
+        '403':
+          description: "Não lotado (SEM_PERMISSAO) ou consentimento ausente/expirado/revogado (CONSENTIMENTO_AUSENTE)"
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problema' }
+        '404': { $ref: '#/components/responses/Problema' }
+        '503':
+          description: "Falha ao gravar a auditoria ou dependência indisponível (DEPENDENCIA_INDISPONIVEL); nada é devolvido"
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problema' }
+    put:
+      tags: [Prontuario]
+      operationId: atualizarProntuario
+      summary: Atualiza alergias e medicações (GESTOR)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AtualizarProntuarioRequest' }
+      responses:
+        '200':
+          description: Atualizado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Prontuario' }
+        '400': { $ref: '#/components/responses/Problema' }
+        '404': { $ref: '#/components/responses/Problema' }
+    delete:
+      tags: [Prontuario]
+      operationId: removerProntuario
+      summary: Remove o prontuário e seus atendimentos (GESTOR — eliminação a pedido do titular, LGPD). A auditoria é preservada.
+      responses:
+        '204': { description: Removido }
+        '404': { $ref: '#/components/responses/Problema' }
+  /prontuarios/{pacienteId}/atendimentos:
+    post:
+      tags: [Prontuario]
+      operationId: registrarAtendimento
+      summary: Registra um atendimento no prontuário (PROFISSIONAL lotado na unidade, com consentimento válido)
+      parameters:
+        - { name: pacienteId, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/UserRoles'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegistrarAtendimentoRequest' }
+      responses:
+        '201':
+          description: Atendimento registrado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Atendimento' }
+        '400': { $ref: '#/components/responses/Problema' }
+        '403': { $ref: '#/components/responses/Problema' }
+        '404': { $ref: '#/components/responses/Problema' }
+  /consentimentos:
+    get:
+      tags: [Consentimento]
+      operationId: listarConsentimentos
+      summary: RF06 — Consentimentos do paciente autenticado (ativos, expirados e revogados)
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/UserRoles'
+        - { name: apenasAtivos, in: query, required: false, schema: { type: boolean, default: false } }
+      responses:
+        '200':
+          description: Consentimentos (mais recentes primeiro)
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Consentimento' } }
+    post:
+      tags: [Consentimento]
+      operationId: concederConsentimento
+      summary: RF05 — Paciente concede acesso ao prontuário para uma unidade
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/UserRoles'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConcederConsentimentoRequest' }
+      responses:
+        '201':
+          description: Concedido
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Consentimento' }
+        '400': { $ref: '#/components/responses/Problema' }
+        '409':
+          description: "Já existe consentimento válido para a unidade (CONSENTIMENTO_DUPLICADO)"
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problema' }
+  /consentimentos/{consentimentoId}:
+    parameters:
+      - { name: consentimentoId, in: path, required: true, schema: { type: string } }
+      - $ref: '#/components/parameters/UserId'
+      - $ref: '#/components/parameters/UserRoles'
+    put:
+      tags: [Consentimento]
+      operationId: renovarConsentimento
+      summary: Renova o prazo de um consentimento ainda válido (titular)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RenovarConsentimentoRequest' }
+      responses:
+        '200':
+          description: Renovado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Consentimento' }
+        '400': { $ref: '#/components/responses/Problema' }
+        '403': { $ref: '#/components/responses/Problema' }
+        '404': { $ref: '#/components/responses/Problema' }
+        '409': { $ref: '#/components/responses/Problema' }
+    delete:
+      tags: [Consentimento]
+      operationId: revogarConsentimento
+      summary: RF05 — Revoga com efeito imediato (titular); preserva o histórico
+      responses:
+        '204': { description: Revogado }
+        '403': { $ref: '#/components/responses/Problema' }
+        '404': { $ref: '#/components/responses/Problema' }
+  /auditoria/prontuarios/{prontuarioId}:
+    get:
+      tags: [Auditoria]
+      operationId: listarAuditoriaProntuario
+      summary: RF16 — Acessos ao prontuário (titular vê todos; GESTOR vê os das suas unidades)
+      parameters:
+        - { name: prontuarioId, in: path, required: true, schema: { type: string, example: pront-001 } }
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/UserRoles'
+        - { name: dataInicio, in: query, required: false, schema: { type: string, format: date-time } }
+        - { name: dataFim, in: query, required: false, schema: { type: string, format: date-time } }
+      responses:
+        '200':
+          description: Acessos (mais recentes primeiro)
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/LogAuditoria' } }
+        '403': { $ref: '#/components/responses/Problema' }
+        '404': { $ref: '#/components/responses/Problema' }
+  /internal/consentimentos/validos:
+    get:
+      tags: [Interno]
+      operationId: listarPacientesComConsentimentoValido
+      summary: Pacientes com consentimento válido para a unidade (usado pelo BFF para marcar `prontuarioAutorizado` na fila)
+      parameters:
+        - { name: unidadeId, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Resultado
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [unidadeId, pacienteIds]
+                properties:
+                  unidadeId: { type: string }
+                  pacienteIds: { type: array, items: { type: string } }
+components:
+  securitySchemes:
+    internalKey: { type: apiKey, in: header, name: X-Internal-Key }
+  parameters:
+    UserId: { name: X-User-Id, in: header, required: true, schema: { type: string, example: usr-prof-03 } }
+    UserRoles: { name: X-User-Roles, in: header, required: true, schema: { type: string, example: PROFISSIONAL } }
+  responses:
+    Problema:
+      description: Erro (RFC 9457)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problema' }
+  schemas:
+    Prontuario:
+      type: object
+      required: [id, pacienteId, alergias, medicacoes, historico]
+      properties:
+        id: { type: string, example: pront-001 }
+        pacienteId: { type: string, example: pac-101 }
+        alergias: { type: array, items: { type: string } }
+        medicacoes: { type: array, items: { type: string } }
+        historico: { type: array, items: { $ref: '#/components/schemas/Atendimento' } }
+    Atendimento:
+      type: object
+      required: [id, prontuarioId, unidadeId, descricao, data]
+      properties:
+        id: { type: string }
+        prontuarioId: { type: string }
+        unidadeId: { type: string }
+        descricao: { type: string }
+        data: { type: string, format: date-time }
+    CriarProntuarioRequest:
+      type: object
+      required: [pacienteId]
+      properties:
+        pacienteId: { type: string }
+        alergias: { type: array, maxItems: 50, items: { type: string, maxLength: 120 } }
+        medicacoes: { type: array, maxItems: 50, items: { type: string, maxLength: 120 } }
+    AtualizarProntuarioRequest:
+      type: object
+      required: [alergias, medicacoes]
+      properties:
+        alergias: { type: array, maxItems: 50, items: { type: string, maxLength: 120 } }
+        medicacoes: { type: array, maxItems: 50, items: { type: string, maxLength: 120 } }
+    RegistrarAtendimentoRequest:
+      type: object
+      required: [unidadeId, descricao]
+      properties:
+        unidadeId: { type: string }
+        descricao: { type: string, minLength: 3, maxLength: 2000 }
+    Consentimento:
+      type: object
+      required: [id, pacienteId, unidadeId, ativo, valido, concedidoEm, expiraEm]
+      properties:
+        id: { type: string }
+        pacienteId: { type: string }
+        unidadeId: { type: string }
+        ativo: { type: boolean }
+        valido: { type: boolean, description: "estaValido(agora) no momento da resposta" }
+        concedidoEm: { type: string, format: date-time }
+        expiraEm: { type: string, format: date-time }
+        revogadoEm: { type: string, format: date-time, nullable: true }
+    ConcederConsentimentoRequest:
+      type: object
+      required: [unidadeId]
+      properties:
+        unidadeId: { type: string, example: upa-01 }
+        validadeDias: { type: integer, minimum: 1, maximum: 365, default: 3 }
+    RenovarConsentimentoRequest:
+      type: object
+      required: [validadeDias]
+      properties:
+        validadeDias: { type: integer, minimum: 1, maximum: 365 }
+    LogAuditoria:
+      type: object
+      required: [id, prontuarioId, consentimentoId, usuarioId, unidadeId, acessadoEm]
+      properties:
+        id: { type: string }
+        prontuarioId: { type: string }
+        consentimentoId: { type: string }
+        usuarioId: { type: string }
+        unidadeId: { type: string }
+        acessadoEm: { type: string, format: date-time }
+    Problema:
+      type: object
+      required: [title, status, codigo]
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+        codigo: { type: string, example: CONSENTIMENTO_AUSENTE }
+        correlationId: { type: string }
