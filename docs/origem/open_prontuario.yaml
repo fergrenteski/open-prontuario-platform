@@ -1,0 +1,852 @@
+openapi: 3.2.0
+info:
+  title: API do Sistema de Prontuário e Filas UBS/UPA
+  description: |
+    API do sistema de gerenciamento de filas por prioridade clínica e
+    compartilhamento consentido de prontuários entre pacientes e unidades
+    de pronto atendimento.
+
+    Consumida por dois clientes:
+    - **App do Paciente** (React Native): UPAs próximas, aviso de chegada
+      com sintomas, consentimento e consulta ao próprio prontuário.
+    - **Painel do Atendente** (React JS): seleção de unidade, fila priorizada,
+      confirmação de chegada, repriorização, prontuário autorizado, início do
+      atendimento, encerramento do registro e auditoria de acessos.
+
+    Backend em Spring Boot (Azure Container Apps), mensageria assíncrona via
+    Azure Service Bus e persistência em Azure Cosmos DB (API MongoDB).
+
+    Cada operação está rastreada ao requisito funcional correspondente do
+    documento arc42 (seção 1.1, Matriz de Rastreabilidade).
+  version: "1.1.0"
+  contact:
+    name: Ana Paula Alves, Artur Bertoni, Bernardo Plottegher, Luiz Fernando Grenteski
+  license:
+    name: Uso acadêmico - PUCPR
+
+servers:
+  - url: https://api-prontuario-filas.brazilsouth.azurecontainerapps.io/api/v1
+    description: Produção (Azure Container Apps)
+  - url: http://localhost:8080/api/v1
+    description: Desenvolvimento local (Spring Boot)
+
+tags:
+  - name: Unidades
+    summary: Unidades de saúde
+    description: Proximidade, vínculo do profissional e indicadores agregados da unidade.
+  - name: Fila
+    summary: Gestão da fila de atendimento
+    description: >
+      Ciclo de vida completo do registro na fila: aviso de chegada, listagem
+      priorizada, confirmação de chegada, repriorização, início do atendimento
+      e encerramento. Cada transição publica um evento no Azure Service Bus.
+  - name: Prontuario
+    summary: Prontuário do paciente
+    description: Consulta ao histórico clínico, sujeita a consentimento válido.
+  - name: Consentimento
+    summary: Consentimento de compartilhamento
+    description: Concessão e revogação do acesso ao prontuário por unidade.
+  - name: Auditoria
+    summary: Auditoria de acessos
+    description: Consulta ao registro de acessos a prontuários.
+
+security:
+  - bearerAuth: []
+
+paths:
+  /unidades/proximas:
+    get:
+      tags: [Unidades]
+      operationId: listarUnidadesProximas
+      summary: Lista as unidades próximas com status de fila
+      description: |
+        **RF02.** Usado pelo App do Paciente para exibir no mapa as unidades
+        próximas à localização atual, já com a situação da fila de cada uma,
+        lida da visão agregada.
+      parameters:
+        - name: latitude
+          in: query
+          required: true
+          schema: { type: number, format: double, example: -25.4284 }
+        - name: longitude
+          in: query
+          required: true
+          schema: { type: number, format: double, example: -49.2733 }
+        - name: raioKm
+          in: query
+          required: false
+          description: Raio de busca em quilômetros
+          schema: { type: integer, default: 20, minimum: 1, maximum: 100 }
+      responses:
+        '200':
+          description: Unidades próximas retornadas com sucesso
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/UnidadeProxima' }
+              examples:
+                padrao:
+                  summary: Duas unidades próximas
+                  value:
+                    - id: "upa-01"
+                      nome: "UPA Boa Vista"
+                      tipo: "UPA"
+                      distanciaKm: 3.2
+                      totalPresente: 14
+                      totalACaminho: 5
+                      tempoMedioEsperaMin: 55
+                    - id: "upa-02"
+                      nome: "UPA Cajuru"
+                      tipo: "UPA"
+                      distanciaKm: 7.8
+                      totalPresente: 6
+                      totalACaminho: 2
+                      tempoMedioEsperaMin: 25
+        '400': { $ref: '#/components/responses/RequisicaoInvalida' }
+        '401': { $ref: '#/components/responses/NaoAutenticado' }
+
+  /unidades/minhas:
+    get:
+      tags: [Unidades]
+      operationId: listarMinhasUnidades
+      summary: Lista as unidades às quais o profissional autenticado está vinculado
+      description: |
+        **RF07.** Usado pelo Painel do Atendente no login, para que o
+        profissional selecione a UPA em que está lotado. As unidades são
+        derivadas do vínculo do usuário autenticado; a operação não aceita
+        identificador de usuário como parâmetro de entrada.
+      responses:
+        '200':
+          description: Unidades vinculadas ao profissional autenticado
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Unidade' }
+              examples:
+                padrao:
+                  value:
+                    - id: "upa-01"
+                      nome: "UPA Boa Vista"
+                      tipo: "UPA"
+        '401': { $ref: '#/components/responses/NaoAutenticado' }
+        '403': { $ref: '#/components/responses/SemPermissao' }
+
+  /unidades/{unidadeId}/visao-agregada:
+    get:
+      tags: [Unidades]
+      operationId: consultarVisaoAgregada
+      summary: Consulta os indicadores agregados da fila de uma unidade
+      description: |
+        **RF18.** Retorna o documento pré-calculado mantido de forma assíncrona
+        pelo Worker de Fila a partir dos eventos publicados no Azure Service Bus.
+        Por depender de processamento assíncrono, o dado pode estar alguns
+        segundos atrás do estado operacional real (consistência eventual); para
+        precisão imediata, use `GET /fila/{unidadeId}`.
+      parameters:
+        - $ref: '#/components/parameters/UnidadeId'
+      responses:
+        '200':
+          description: Visão agregada da unidade
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VisaoAgregada' }
+              examples:
+                padrao:
+                  value:
+                    unidadeId: "upa-01"
+                    totalPresente: 14
+                    totalACaminho: 5
+                    tempoMedioEsperaMin: 55
+                    atualizadoEm: "2026-09-09T08:31:12-03:00"
+        '401': { $ref: '#/components/responses/NaoAutenticado' }
+        '404': { $ref: '#/components/responses/NaoEncontrado' }
+
+  /fila/{unidadeId}:
+    get:
+      tags: [Fila]
+      operationId: listarFilaPorPrioridade
+      summary: Lista a fila da unidade ordenada por prioridade
+      description: |
+        **RF08, RF09.** Usado pelo Painel do Atendente após a seleção da UPA.
+        Retorna pacientes presentes e a caminho, ordenados por prioridade
+        clínica e, em caso de empate, por horário de chegada (ou de aviso,
+        para quem ainda está a caminho). O filtro `status` permite distinguir
+        explicitamente os dois grupos.
+      parameters:
+        - $ref: '#/components/parameters/UnidadeId'
+        - name: status
+          in: query
+          required: false
+          description: Filtra por situação do paciente na fila
+          schema: { $ref: '#/components/schemas/StatusFila' }
+      responses:
+        '200':
+          description: Fila retornada com sucesso
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/RegistroFila' }
+              examples:
+                padrao:
+                  summary: Paciente presente e paciente a caminho
+                  value:
+                    - id: "fila-501"
+                      pacienteId: "pac-101"
+                      pacienteNome: "João Pereira"
+                      unidadeId: "upa-01"
+                      prioridade: "MUITO_URGENTE"
+                      status: "AGUARDANDO"
+                      sintomas: ["dor no peito", "falta de ar"]
+                      horarioAviso: "2026-09-09T08:05:00-03:00"
+                      horarioChegada: "2026-09-09T08:22:00-03:00"
+                      horarioInicioAtendimento: null
+                      motivoSaida: null
+                      prontuarioAutorizado: true
+                    - id: "fila-502"
+                      pacienteId: "pac-102"
+                      pacienteNome: "Maria Souza"
+                      unidadeId: "upa-01"
+                      prioridade: "POUCO_URGENTE"
+                      status: "A_CAMINHO"
+                      sintomas: ["febre baixa"]
+                      horarioAviso: "2026-09-09T08:15:00-03:00"
+                      horarioChegada: null
+                      horarioInicioAtendimento: null
+                      motivoSaida: null
+                      prontuarioAutorizado: false
+        '401': { $ref: '#/components/responses/NaoAutenticado' }
+        '403': { $ref: '#/components/responses/SemPermissao' }
+        '404': { $ref: '#/components/responses/NaoEncontrado' }
+
+  /fila/{unidadeId}/aviso-chegada:
+    post:
+      tags: [Fila]
+      operationId: avisarChegada
+      summary: Registra o aviso de chegada do paciente com seus sintomas
+      description: |
+        **RF03, RF04.** Usado pelo App do Paciente. Cria o registro na fila com
+        status `A_CAMINHO` e publica o evento `PacienteACaminho` no Azure
+        Service Bus. Quando `autorizarProntuario` é verdadeiro, cria também o
+        consentimento para a unidade (RF05).
+      parameters:
+        - $ref: '#/components/parameters/UnidadeId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AvisoChegadaRequest' }
+            examples:
+              padrao:
+                summary: Aviso com sintomas e consentimento
+                value:
+                  sintomas: ["dor no peito", "falta de ar"]
+                  tempoEstimadoChegadaMin: 18
+                  autorizarProntuario: true
+      responses:
+        '201':
+          description: Aviso registrado e paciente inserido na fila
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RegistroFila' }
+        '400': { $ref: '#/components/responses/RequisicaoInvalida' }
+        '401': { $ref: '#/components/responses/NaoAutenticado' }
+        '404': { $ref: '#/components/responses/NaoEncontrado' }
+        '409':
+          description: O paciente já possui um registro ativo nesta unidade
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Erro' }
+              examples:
+                duplicado:
+                  value:
+                    codigo: "REGISTRO_ATIVO_DUPLICADO"
+                    mensagem: "O paciente já possui um registro ativo nesta unidade."
+
+  /fila/{registroId}/confirmar-chegada:
+    post:
+      tags: [Fila]
+      operationId: confirmarChegada
+      summary: Confirma a chegada física do paciente à unidade
+      description: |
+        **RF10.** Usado pelo Painel do Atendente quando o paciente se apresenta
+        na recepção. Transiciona o registro de `A_CAMINHO` para `AGUARDANDO`,
+        grava o `horarioChegada` e publica o evento `PacienteChegou`.
+      parameters:
+        - $ref: '#/components/parameters/RegistroId'
+      responses:
+        '200':
+          description: Chegada confirmada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RegistroFila' }
+        '401': { $ref: '#/components/responses/NaoAutenticado' }
+        '403': { $ref: '#/components/responses/SemPermissao' }
+        '404': { $ref: '#/components/responses/NaoEncontrado' }
+        '409': { $ref: '#/components/responses/TransicaoInvalida' }
+
+  /fila/{registroId}/prioridade:
+    patch:
+      tags: [Fila]
+      operationId: alterarPrioridade
+      summary: Altera a prioridade clínica de um paciente na fila
+      description: |
+        **RF11.** Usado pelo Painel do Atendente após a triagem. Publica o
+        evento `PrioridadeAlterada` no Azure Service Bus. Aplicável a registros
+        nos estados `A_CAMINHO` e `AGUARDANDO`.
+      parameters:
+        - $ref: '#/components/parameters/RegistroId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [prioridade]
+              properties:
+                prioridade: { $ref: '#/components/schemas/Prioridade' }
+                justificativa:
+                  type: string
+                  description: Observação registrada pela triagem
+                  example: "Triagem identificou dor torácica irradiada"
+            examples:
+              padrao:
+                value:
+                  prioridade: "MUITO_URGENTE"
+                  justificativa: "Triagem identificou dor torácica irradiada"
+      responses:
+        '200':
+          description: Prioridade atualizada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RegistroFila' }
+        '400': { $ref: '#/components/responses/RequisicaoInvalida' }
+        '401': { $ref: '#/components/responses/NaoAutenticado' }
+        '403': { $ref: '#/components/responses/SemPermissao' }
+        '404': { $ref: '#/components/responses/NaoEncontrado' }
+        '409': { $ref: '#/components/responses/TransicaoInvalida' }
+
+  /fila/{registroId}/iniciar-atendimento:
+    post:
+      tags: [Fila]
+      operationId: iniciarAtendimento
+      summary: Inicia o atendimento de um paciente da fila
+      description: |
+        **RF13.** Usado pelo Painel do Atendente quando o profissional chama o
+        paciente. Transiciona o registro de `AGUARDANDO` para `EM_ATENDIMENTO`,
+        grava o `horarioInicioAtendimento` e publica o evento
+        `AtendimentoIniciado`.
+      parameters:
+        - $ref: '#/components/parameters/RegistroId'
+      responses:
+        '200':
+          description: Atendimento iniciado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RegistroFila' }
+        '401': { $ref: '#/components/responses/NaoAutenticado' }
+        '403': { $ref: '#/components/responses/SemPermissao' }
+        '404': { $ref: '#/components/responses/NaoEncontrado' }
+        '409': { $ref: '#/components/responses/TransicaoInvalida' }
+
+  /fila/{registroId}:
+    delete:
+      tags: [Fila]
+      operationId: removerDaFila
+      summary: Encerra o registro do paciente na fila
+      description: |
+        **RF14.** Usado pelo Painel do Atendente ao concluir o atendimento,
+        registrar desistência ou encaminhar o paciente. Transiciona o registro
+        para `FINALIZADO`, grava o `motivoSaida` e publica o evento
+        `PacienteRemovido`. O registro não é apagado fisicamente, preservando
+        o histórico para auditoria e cálculo de tempo médio.
+      parameters:
+        - $ref: '#/components/parameters/RegistroId'
+        - name: motivo
+          in: query
+          required: true
+          description: Motivo do encerramento do registro
+          schema: { $ref: '#/components/schemas/MotivoSaida' }
+      responses:
+        '204':
+          description: Registro encerrado
+        '400': { $ref: '#/components/responses/RequisicaoInvalida' }
+        '401': { $ref: '#/components/responses/NaoAutenticado' }
+        '403': { $ref: '#/components/responses/SemPermissao' }
+        '404': { $ref: '#/components/responses/NaoEncontrado' }
+        '409': { $ref: '#/components/responses/TransicaoInvalida' }
+
+  /prontuarios/{pacienteId}:
+    get:
+      tags: [Prontuario]
+      operationId: consultarProntuario
+      summary: Consulta o prontuário de um paciente
+      description: |
+        **RF12, RF15.** Usado pelo Painel do Atendente. O acesso só é liberado
+        se existir consentimento ativo do paciente para a unidade informada.
+        Todo acesso bem-sucedido gera registro em log de auditoria, consultável
+        via `GET /auditoria/prontuarios/{prontuarioId}`.
+      parameters:
+        - $ref: '#/components/parameters/PacienteId'
+        - name: unidadeId
+          in: query
+          required: true
+          description: Unidade que solicita o acesso, usada na validação do consentimento e no registro de auditoria
+          schema: { type: string, example: "upa-01" }
+      responses:
+        '200':
+          description: Prontuário retornado com sucesso
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Prontuario' }
+              examples:
+                padrao:
+                  summary: Prontuário com histórico
+                  value:
+                    id: "pront-001"
+                    pacienteId: "pac-101"
+                    alergias: ["dipirona"]
+                    medicacoes: ["losartana 50mg"]
+                    historico:
+                      - id: "atd-900"
+                        prontuarioId: "pront-001"
+                        unidadeId: "ubs-03"
+                        descricao: "Consulta de rotina - hipertensão controlada"
+                        data: "2026-06-14T10:30:00-03:00"
+        '401': { $ref: '#/components/responses/NaoAutenticado' }
+        '403':
+          description: Consentimento ausente ou revogado para esta unidade
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Erro' }
+              examples:
+                semConsentimento:
+                  value:
+                    codigo: "CONSENTIMENTO_AUSENTE"
+                    mensagem: "O paciente não autorizou o compartilhamento do prontuário com esta unidade."
+        '404': { $ref: '#/components/responses/NaoEncontrado' }
+
+  /prontuarios/me:
+    get:
+      tags: [Prontuario]
+      operationId: consultarProprioProntuario
+      summary: Consulta o próprio prontuário
+      description: |
+        **RF06.** Usado pelo App do Paciente. Retorna o prontuário do usuário
+        autenticado. Não exige consentimento e não gera registro de auditoria
+        de acesso de terceiros.
+      responses:
+        '200':
+          description: Prontuário do paciente autenticado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Prontuario' }
+        '401': { $ref: '#/components/responses/NaoAutenticado' }
+        '404': { $ref: '#/components/responses/NaoEncontrado' }
+
+  /consentimentos:
+    get:
+      tags: [Consentimento]
+      operationId: listarConsentimentos
+      summary: Lista os consentimentos concedidos pelo paciente
+      description: |
+        **RF06.** Usado pelo App do Paciente no histórico de compartilhamentos.
+        Retorna consentimentos ativos e revogados do usuário autenticado.
+      parameters:
+        - name: apenasAtivos
+          in: query
+          required: false
+          description: Quando verdadeiro, retorna somente consentimentos não revogados
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Consentimentos do paciente autenticado
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Consentimento' }
+        '401': { $ref: '#/components/responses/NaoAutenticado' }
+    post:
+      tags: [Consentimento]
+      operationId: concederConsentimento
+      summary: Concede consentimento de compartilhamento a uma unidade
+      description: |
+        **RF05.** Usado pelo App do Paciente. Pode ser chamado isoladamente ou
+        implicitamente pelo `POST /fila/{unidadeId}/aviso-chegada` quando o
+        campo `autorizarProntuario` é verdadeiro.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [unidadeId]
+              properties:
+                unidadeId: { type: string, example: "upa-01" }
+            examples:
+              padrao:
+                value:
+                  unidadeId: "upa-01"
+      responses:
+        '201':
+          description: Consentimento concedido
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Consentimento' }
+        '400': { $ref: '#/components/responses/RequisicaoInvalida' }
+        '401': { $ref: '#/components/responses/NaoAutenticado' }
+        '404': { $ref: '#/components/responses/NaoEncontrado' }
+        '409':
+          description: Já existe consentimento ativo para esta unidade
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Erro' }
+
+  /consentimentos/{consentimentoId}:
+    delete:
+      tags: [Consentimento]
+      operationId: revogarConsentimento
+      summary: Revoga um consentimento previamente concedido
+      description: |
+        **RF05.** Usado pelo App do Paciente. A revogação tem efeito imediato:
+        a próxima tentativa de leitura do prontuário pela unidade retorna 403.
+        O registro é marcado como inativo, preservando o histórico.
+      parameters:
+        - name: consentimentoId
+          in: path
+          required: true
+          schema: { type: string, example: "cons-701" }
+      responses:
+        '204':
+          description: Consentimento revogado
+        '401': { $ref: '#/components/responses/NaoAutenticado' }
+        '403': { $ref: '#/components/responses/SemPermissao' }
+        '404': { $ref: '#/components/responses/NaoEncontrado' }
+
+  /auditoria/prontuarios/{prontuarioId}:
+    get:
+      tags: [Auditoria]
+      operationId: listarAuditoriaProntuario
+      summary: Lista os acessos registrados a um prontuário
+      description: |
+        **RF16.** Retorna o log de auditoria de acessos ao prontuário, com
+        usuário, unidade e horário. Acessível ao próprio paciente titular do
+        prontuário e a perfis de gestão.
+      parameters:
+        - name: prontuarioId
+          in: path
+          required: true
+          schema: { type: string, example: "pront-001" }
+        - name: dataInicio
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: dataFim
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Acessos registrados
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/LogAuditoria' }
+              examples:
+                padrao:
+                  value:
+                    - id: "log-3001"
+                      prontuarioId: "pront-001"
+                      usuarioId: "usr-atendente-07"
+                      unidadeId: "upa-01"
+                      acessadoEm: "2026-09-09T08:26:41-03:00"
+        '401': { $ref: '#/components/responses/NaoAutenticado' }
+        '403': { $ref: '#/components/responses/SemPermissao' }
+        '404': { $ref: '#/components/responses/NaoEncontrado' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        **RF01, RF07.** Token JWT emitido pelo Microsoft Entra ID (OAuth2/OIDC).
+        O perfil do usuário (paciente, atendente, profissional, gestor) e seu
+        vínculo com unidades são derivados das claims do token.
+
+  parameters:
+    UnidadeId:
+      name: unidadeId
+      in: path
+      required: true
+      description: Identificador da unidade de saúde
+      schema: { type: string, example: "upa-01" }
+    RegistroId:
+      name: registroId
+      in: path
+      required: true
+      description: Identificador do registro do paciente na fila
+      schema: { type: string, example: "fila-501" }
+    PacienteId:
+      name: pacienteId
+      in: path
+      required: true
+      description: Identificador do paciente
+      schema: { type: string, example: "pac-101" }
+
+  responses:
+    NaoAutenticado:
+      description: Token ausente ou inválido
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Erro' }
+          examples:
+            padrao:
+              value:
+                codigo: "NAO_AUTENTICADO"
+                mensagem: "Token ausente ou inválido."
+    SemPermissao:
+      description: O perfil autenticado não tem permissão para esta operação
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Erro' }
+          examples:
+            padrao:
+              value:
+                codigo: "SEM_PERMISSAO"
+                mensagem: "O perfil autenticado não tem permissão para esta operação."
+    NaoEncontrado:
+      description: Recurso não encontrado
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Erro' }
+          examples:
+            padrao:
+              value:
+                codigo: "RECURSO_NAO_ENCONTRADO"
+                mensagem: "Recurso não encontrado."
+    RequisicaoInvalida:
+      description: Dados da requisição inválidos
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Erro' }
+          examples:
+            padrao:
+              value:
+                codigo: "REQUISICAO_INVALIDA"
+                mensagem: "Os dados informados são inválidos."
+    TransicaoInvalida:
+      description: |
+        A transição de estado solicitada não é válida para o status atual do
+        registro, conforme a máquina de estados documentada na seção 6.3 do arc42.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Erro' }
+          examples:
+            padrao:
+              value:
+                codigo: "TRANSICAO_INVALIDA"
+                mensagem: "Não é possível iniciar o atendimento de um paciente com status A_CAMINHO."
+
+  schemas:
+    Prioridade:
+      type: string
+      description: Classificação de risco em cinco níveis (referência - Protocolo de Manchester)
+      enum: [EMERGENCIA, MUITO_URGENTE, URGENTE, POUCO_URGENTE, NAO_URGENTE]
+      example: MUITO_URGENTE
+
+    StatusFila:
+      type: string
+      description: |
+        Situação do paciente na fila. Transições válidas:
+        `A_CAMINHO` → `AGUARDANDO` → `EM_ATENDIMENTO` → `FINALIZADO`,
+        com encerramento antecipado possível a partir de `A_CAMINHO` e `AGUARDANDO`.
+      enum: [A_CAMINHO, AGUARDANDO, EM_ATENDIMENTO, FINALIZADO]
+      example: AGUARDANDO
+
+    MotivoSaida:
+      type: string
+      description: Motivo do encerramento do registro na fila
+      enum: [ATENDIDO, DESISTENCIA, ENCAMINHADO]
+      example: ATENDIDO
+
+    TipoUnidade:
+      type: string
+      enum: [UBS, UPA]
+      example: UPA
+
+    Unidade:
+      type: object
+      required: [id, nome, tipo]
+      properties:
+        id: { type: string, example: "upa-01" }
+        nome: { type: string, example: "UPA Boa Vista" }
+        tipo: { $ref: '#/components/schemas/TipoUnidade' }
+
+    UnidadeProxima:
+      allOf:
+        - $ref: '#/components/schemas/Unidade'
+        - type: object
+          required: [distanciaKm, totalPresente, totalACaminho, tempoMedioEsperaMin]
+          properties:
+            distanciaKm: { type: number, format: double, example: 3.2 }
+            totalPresente: { type: integer, minimum: 0, example: 14 }
+            totalACaminho: { type: integer, minimum: 0, example: 5 }
+            tempoMedioEsperaMin: { type: integer, minimum: 0, example: 55 }
+
+    VisaoAgregada:
+      type: object
+      description: Documento pré-calculado de forma assíncrona pelo Worker de Fila
+      required: [unidadeId, totalPresente, totalACaminho, tempoMedioEsperaMin, atualizadoEm]
+      properties:
+        unidadeId: { type: string, example: "upa-01" }
+        totalPresente:
+          type: integer
+          minimum: 0
+          description: Pacientes com status AGUARDANDO na unidade
+          example: 14
+        totalACaminho:
+          type: integer
+          minimum: 0
+          description: Pacientes com status A_CAMINHO para a unidade
+          example: 5
+        tempoMedioEsperaMin: { type: integer, minimum: 0, example: 55 }
+        atualizadoEm:
+          type: string
+          format: date-time
+          example: "2026-09-09T08:31:12-03:00"
+
+    AvisoChegadaRequest:
+      type: object
+      required: [sintomas]
+      properties:
+        sintomas:
+          type: array
+          minItems: 1
+          items: { type: string }
+          example: ["dor no peito", "falta de ar"]
+        tempoEstimadoChegadaMin:
+          type: integer
+          minimum: 0
+          description: Estimativa de deslocamento informada pelo app, de caráter não vinculante
+          example: 18
+        autorizarProntuario:
+          type: boolean
+          default: false
+          description: Quando verdadeiro, cria também o consentimento para esta unidade
+          example: true
+
+    RegistroFila:
+      type: object
+      required: [id, pacienteId, unidadeId, prioridade, status, horarioAviso]
+      properties:
+        id: { type: string, example: "fila-501" }
+        pacienteId: { type: string, example: "pac-101" }
+        pacienteNome: { type: string, example: "João Pereira" }
+        unidadeId: { type: string, example: "upa-01" }
+        prioridade: { $ref: '#/components/schemas/Prioridade' }
+        status: { $ref: '#/components/schemas/StatusFila' }
+        sintomas:
+          type: array
+          items: { type: string }
+          example: ["dor no peito", "falta de ar"]
+        horarioAviso:
+          type: string
+          format: date-time
+          example: "2026-09-09T08:05:00-03:00"
+        horarioChegada:
+          type: [string, "null"]
+          format: date-time
+          description: Preenchido na confirmação de chegada; nulo enquanto o status for A_CAMINHO
+          example: "2026-09-09T08:22:00-03:00"
+        horarioInicioAtendimento:
+          type: [string, "null"]
+          format: date-time
+          description: Preenchido no início do atendimento; nulo nos estados anteriores
+          example: null
+        motivoSaida:
+          oneOf:
+            - $ref: '#/components/schemas/MotivoSaida'
+            - type: "null"
+          description: Preenchido apenas quando o status é FINALIZADO
+        prontuarioAutorizado:
+          type: boolean
+          description: Indica se há consentimento ativo do paciente para esta unidade
+          example: true
+
+    Prontuario:
+      type: object
+      required: [id, pacienteId]
+      properties:
+        id: { type: string, example: "pront-001" }
+        pacienteId: { type: string, example: "pac-101" }
+        alergias:
+          type: array
+          items: { type: string }
+          example: ["dipirona"]
+        medicacoes:
+          type: array
+          items: { type: string }
+          example: ["losartana 50mg"]
+        historico:
+          type: array
+          items: { $ref: '#/components/schemas/Atendimento' }
+
+    Atendimento:
+      type: object
+      required: [id, prontuarioId, unidadeId, descricao, data]
+      properties:
+        id: { type: string, example: "atd-900" }
+        prontuarioId: { type: string, example: "pront-001" }
+        unidadeId: { type: string, example: "ubs-03" }
+        descricao: { type: string, example: "Consulta de rotina - hipertensão controlada" }
+        data:
+          type: string
+          format: date-time
+          example: "2026-06-14T10:30:00-03:00"
+
+    Consentimento:
+      type: object
+      required: [id, pacienteId, unidadeId, ativo, concedidoEm]
+      properties:
+        id: { type: string, example: "cons-701" }
+        pacienteId: { type: string, example: "pac-101" }
+        unidadeId: { type: string, example: "upa-01" }
+        unidadeNome: { type: string, example: "UPA Boa Vista" }
+        ativo: { type: boolean, example: true }
+        concedidoEm:
+          type: string
+          format: date-time
+          example: "2026-09-09T08:05:00-03:00"
+        revogadoEm:
+          type: [string, "null"]
+          format: date-time
+          example: null
+
+    LogAuditoria:
+      type: object
+      required: [id, prontuarioId, usuarioId, unidadeId, acessadoEm]
+      properties:
+        id: { type: string, example: "log-3001" }
+        prontuarioId: { type: string, example: "pront-001" }
+        usuarioId:
+          type: string
+          description: Identificador do profissional que acessou o prontuário
+          example: "usr-atendente-07"
+        unidadeId: { type: string, example: "upa-01" }
+        acessadoEm:
+          type: string
+          format: date-time
+          example: "2026-09-09T08:26:41-03:00"
+
+    Erro:
+      type: object
+      required: [codigo, mensagem]
+      properties:
+        codigo: { type: string, example: "CONSENTIMENTO_AUSENTE" }
+        mensagem: { type: string, example: "O paciente não autorizou o compartilhamento do prontuário com esta unidade." }
