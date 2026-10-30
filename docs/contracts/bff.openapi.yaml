@@ -1,0 +1,590 @@
+openapi: 3.0.3
+info:
+  title: Open Prontuário — BFF (Backend for Frontend)
+  version: 1.0.0
+  description: |
+    Único ponto de entrada do frontend (atrás do API Gateway). Responsável por:
+    autenticação (valida o JWT — Entra ID ou modo dev), autorização por perfil
+    (extensão `x-roles` em cada operação), **proxy** das operações CRUD para os
+    microserviços, **orquestração** (aviso de chegada + consentimento) e
+    **agregação** (`GET /aggregated-data`, `GET /unidades/proximas`, `GET /fila/{unidadeId}`).
+
+    Para cada chamada a jusante, envia `X-Internal-Key`, `X-User-Id`,
+    `X-User-Roles`, `X-User-Name` e `X-Correlation-Id` (ver `CONVENCOES.md`).
+    Erros dos serviços são repassados com o mesmo status e corpo `problem+json`.
+    Timeout por chamada: `UPSTREAM_TIMEOUT_MS` (3 s); timeout/conexão recusada → 503
+    `DEPENDENCIA_INDISPONIVEL` (exceto no `/aggregated-data`, que degrada).
+  license: { name: Uso acadêmico - PUCPR }
+  contact:
+    name: Ana Paula Alves, Artur Bertoni, Bernardo Plottegher, Luiz Fernando Grenteski
+servers:
+  - url: http://localhost:3000/api
+    description: Local
+security:
+  - bearerAuth: []
+tags:
+  - name: Auth
+  - name: Agregacao
+  - name: Unidades
+  - name: Lotacoes
+  - name: Fila
+  - name: Prontuario
+  - name: Consentimento
+  - name: Auditoria
+paths:
+  /health:
+    get:
+      tags: [Auth]
+      operationId: health
+      security: []
+      responses:
+        '200': { description: OK }
+  /auth/personas:
+    get:
+      tags: [Auth]
+      operationId: listarPersonas
+      summary: Personas disponíveis no modo dev (404 quando AUTH_MODE=entra)
+      security: []
+      responses:
+        '200':
+          description: Personas
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Usuario' } }
+        '404': { $ref: '#/components/responses/Problema' }
+  /auth/dev-token:
+    post:
+      tags: [Auth]
+      operationId: emitirDevToken
+      summary: Emite JWT HS256 (1 h) para uma persona do seed (somente AUTH_MODE=dev)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [usuarioId]
+              properties:
+                usuarioId: { type: string, example: usr-atendente-07 }
+      responses:
+        '200':
+          description: Token
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accessToken, expiresIn, usuario]
+                properties:
+                  accessToken: { type: string }
+                  expiresIn: { type: integer, example: 3600 }
+                  usuario: { $ref: '#/components/schemas/Usuario' }
+        '400': { $ref: '#/components/responses/Problema' }
+        '404': { $ref: '#/components/responses/Problema' }
+  /auth/me:
+    get:
+      tags: [Auth]
+      operationId: usuarioAtual
+      x-roles: [PACIENTE, ATENDENTE, PROFISSIONAL, GESTOR]
+      responses:
+        '200':
+          description: Usuário do token
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Usuario' }
+        '401': { $ref: '#/components/responses/Problema' }
+  /aggregated-data:
+    get:
+      tags: [Agregacao]
+      operationId: aggregatedData
+      summary: Endpoint obrigatório do PJBL — agrega MS Fila (SQL) + MS Prontuário (Mongo) + Function em um único JSON
+      x-roles: [ATENDENTE, PROFISSIONAL, GESTOR]
+      description: |
+        Em paralelo (`Promise.allSettled`, timeout por fonte):
+        1. **MS Fila** — `GET /unidades/{unidadeId}` e `GET /fila/{unidadeId}`
+        2. **MS Prontuário** — `GET /internal/consentimentos/validos?unidadeId=` (marca
+           `prontuarioAutorizado` em cada registro) e, se `pacienteId` for informado,
+           `GET /prontuarios/{pacienteId}?unidadeId=` (com as regras de lotação,
+           consentimento e auditoria do serviço)
+        3. **Function** — `GET /api/visao-agregada/{unidadeId}`
+
+        Se alguma fonte falhar, responde **200** com `meta.degraded = true` e a fonte
+        listada em `meta.falhas` (o campo correspondente vem `null`). Se **todas**
+        falharem → **502** `AGREGACAO_FALHOU`. Erros 4xx de regra de negócio da
+        fonte (ex.: 403 sem consentimento no prontuário) não são "falha": vão em
+        `meta.avisos` e o campo vem `null`.
+      parameters:
+        - { name: unidadeId, in: query, required: true, schema: { type: string, example: upa-01 } }
+        - { name: pacienteId, in: query, required: false, schema: { type: string, example: pac-101 } }
+      responses:
+        '200':
+          description: Dados agregados
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AggregatedData' }
+        '400': { $ref: '#/components/responses/Problema' }
+        '401': { $ref: '#/components/responses/Problema' }
+        '403': { $ref: '#/components/responses/Problema' }
+        '502': { $ref: '#/components/responses/Problema' }
+  /unidades:
+    get:
+      tags: [Unidades]
+      operationId: listarUnidades
+      x-roles: [PACIENTE, ATENDENTE, PROFISSIONAL, GESTOR]
+      parameters:
+        - { name: tipo, in: query, required: false, schema: { type: string, enum: [UBS, UPA] } }
+      responses:
+        '200':
+          description: Unidades
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Unidade' } }
+    post:
+      tags: [Unidades]
+      operationId: criarUnidade
+      x-roles: [GESTOR]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '201':
+          description: Criada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Unidade' }
+        '400': { $ref: '#/components/responses/Problema' }
+  /unidades/proximas:
+    get:
+      tags: [Unidades]
+      operationId: listarUnidadesProximas
+      summary: RF02 — MS Fila (distância) + Function (indicadores) agregados
+      x-roles: [PACIENTE]
+      parameters:
+        - { name: latitude, in: query, required: true, schema: { type: number } }
+        - { name: longitude, in: query, required: true, schema: { type: number } }
+        - { name: raioKm, in: query, required: false, schema: { type: integer, default: 20 } }
+      responses:
+        '200':
+          description: Se a Function falhar, os indicadores vêm null (degradação)
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/UnidadeProxima' } }
+  /unidades/minhas:
+    get:
+      tags: [Unidades]
+      operationId: listarMinhasUnidades
+      x-roles: [ATENDENTE, PROFISSIONAL, GESTOR]
+      responses:
+        '200':
+          description: Unidades do profissional
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Unidade' } }
+  /unidades/{unidadeId}:
+    parameters:
+      - { name: unidadeId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Unidades]
+      operationId: buscarUnidade
+      x-roles: [PACIENTE, ATENDENTE, PROFISSIONAL, GESTOR]
+      responses:
+        '200':
+          description: Unidade
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Unidade' }
+        '404': { $ref: '#/components/responses/Problema' }
+    put:
+      tags: [Unidades]
+      operationId: atualizarUnidade
+      x-roles: [GESTOR]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { description: Atualizada }
+        '404': { $ref: '#/components/responses/Problema' }
+    delete:
+      tags: [Unidades]
+      operationId: removerUnidade
+      x-roles: [GESTOR]
+      responses:
+        '204': { description: Removida }
+        '409': { $ref: '#/components/responses/Problema' }
+  /unidades/{unidadeId}/visao-agregada:
+    get:
+      tags: [Unidades]
+      operationId: consultarVisaoAgregada
+      summary: RF18 — proxy para a Function
+      x-roles: [PACIENTE, ATENDENTE, PROFISSIONAL, GESTOR]
+      parameters:
+        - { name: unidadeId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Visão agregada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VisaoAgregada' }
+  /lotacoes:
+    get:
+      tags: [Lotacoes]
+      operationId: listarLotacoes
+      x-roles: [GESTOR]
+      parameters:
+        - { name: unidadeId, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Lotações }
+    post:
+      tags: [Lotacoes]
+      operationId: criarLotacao
+      x-roles: [GESTOR]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '201': { description: Criada }
+        '409': { $ref: '#/components/responses/Problema' }
+  /lotacoes/{lotacaoId}:
+    delete:
+      tags: [Lotacoes]
+      operationId: removerLotacao
+      x-roles: [GESTOR]
+      parameters:
+        - { name: lotacaoId, in: path, required: true, schema: { type: string } }
+      responses:
+        '204': { description: Removida }
+  /fila/{id}:
+    get:
+      tags: [Fila]
+      operationId: listarFilaPorPrioridade
+      summary: RF08/RF09 — MS Fila + `prontuarioAutorizado` vindo do MS Prontuário
+      x-roles: [ATENDENTE, PROFISSIONAL, GESTOR]
+      parameters:
+        - { name: id, in: path, required: true, description: "ID da **unidade**", schema: { type: string } }
+        - { name: status, in: query, required: false, schema: { type: string, enum: [A_CAMINHO, AGUARDANDO, EM_ATENDIMENTO, FINALIZADO] } }
+      responses:
+        '200':
+          description: Se o MS Prontuário falhar, `prontuarioAutorizado` vem null
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/RegistroFila' } }
+        '403': { $ref: '#/components/responses/Problema' }
+    delete:
+      tags: [Fila]
+      operationId: removerDaFila
+      summary: RF14 — encerra o registro
+      x-roles: [ATENDENTE, PROFISSIONAL]
+      parameters:
+        - { name: id, in: path, required: true, description: "ID do **registro** de fila", schema: { type: string } }
+        - { name: motivo, in: query, required: true, schema: { type: string, enum: [ATENDIDO, DESISTENCIA, ENCAMINHADO] } }
+      responses:
+        '204': { description: Encerrado }
+        '409': { $ref: '#/components/responses/Problema' }
+  /fila/{unidadeId}/aviso-chegada:
+    post:
+      tags: [Fila]
+      operationId: avisarChegada
+      summary: RF03/RF04/RF05 — cria o registro no MS Fila e, se `autorizarProntuario`, concede o consentimento no MS Prontuário
+      x-roles: [PACIENTE]
+      description: |
+        Se o registro for criado mas o consentimento falhar, responde 201 com
+        `prontuarioAutorizado = false` e `avisos` explicando (o paciente pode
+        autorizar depois em `POST /consentimentos`). 409 `CONSENTIMENTO_DUPLICADO`
+        é tratado como sucesso (`prontuarioAutorizado = true`).
+      parameters:
+        - { name: unidadeId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sintomas]
+              properties:
+                sintomas: { type: array, minItems: 1, items: { type: string } }
+                tempoEstimadoChegadaMin: { type: integer, minimum: 0 }
+                autorizarProntuario: { type: boolean, default: false }
+                validadeConsentimentoDias: { type: integer, minimum: 1, maximum: 365, default: 3 }
+      responses:
+        '201':
+          description: Registro criado
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/RegistroFila'
+                  - type: object
+                    properties:
+                      avisos: { type: array, items: { type: string } }
+        '400': { $ref: '#/components/responses/Problema' }
+        '409': { $ref: '#/components/responses/Problema' }
+  /fila/{registroId}/confirmar-chegada:
+    post:
+      tags: [Fila]
+      operationId: confirmarChegada
+      x-roles: [ATENDENTE, PROFISSIONAL]
+      parameters:
+        - { name: registroId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Confirmada }
+        '409': { $ref: '#/components/responses/Problema' }
+  /fila/{registroId}/prioridade:
+    patch:
+      tags: [Fila]
+      operationId: alterarPrioridade
+      x-roles: [ATENDENTE, PROFISSIONAL]
+      parameters:
+        - { name: registroId, in: path, required: true, schema: { type: string } }
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { description: Alterada }
+        '409': { $ref: '#/components/responses/Problema' }
+  /fila/{registroId}/iniciar-atendimento:
+    post:
+      tags: [Fila]
+      operationId: iniciarAtendimento
+      x-roles: [ATENDENTE, PROFISSIONAL]
+      parameters:
+        - { name: registroId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Iniciado }
+        '409': { $ref: '#/components/responses/Problema' }
+
+  /prontuarios:
+    post:
+      tags: [Prontuario]
+      operationId: criarProntuario
+      x-roles: [GESTOR]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '201': { description: Criado }
+        '409': { $ref: '#/components/responses/Problema' }
+  /prontuarios/me:
+    get:
+      tags: [Prontuario]
+      operationId: consultarProprioProntuario
+      x-roles: [PACIENTE]
+      responses:
+        '200':
+          description: Prontuário
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Prontuario' }
+        '404': { $ref: '#/components/responses/Problema' }
+  /prontuarios/{pacienteId}:
+    parameters:
+      - { name: pacienteId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [Prontuario]
+      operationId: consultarProntuario
+      x-roles: [ATENDENTE, PROFISSIONAL]
+      parameters:
+        - { name: unidadeId, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Prontuário (acesso auditado)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Prontuario' }
+        '403': { $ref: '#/components/responses/Problema' }
+        '503': { $ref: '#/components/responses/Problema' }
+    put:
+      tags: [Prontuario]
+      operationId: atualizarProntuario
+      x-roles: [GESTOR]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { description: Atualizado }
+    delete:
+      tags: [Prontuario]
+      operationId: removerProntuario
+      x-roles: [GESTOR]
+      responses:
+        '204': { description: Removido }
+  /prontuarios/{pacienteId}/atendimentos:
+    post:
+      tags: [Prontuario]
+      operationId: registrarAtendimento
+      x-roles: [PROFISSIONAL]
+      parameters:
+        - { name: pacienteId, in: path, required: true, schema: { type: string } }
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '201': { description: Registrado }
+        '403': { $ref: '#/components/responses/Problema' }
+  /consentimentos:
+    get:
+      tags: [Consentimento]
+      operationId: listarConsentimentos
+      x-roles: [PACIENTE]
+      parameters:
+        - { name: apenasAtivos, in: query, required: false, schema: { type: boolean } }
+      responses:
+        '200':
+          description: Consentimentos
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Consentimento' } }
+    post:
+      tags: [Consentimento]
+      operationId: concederConsentimento
+      x-roles: [PACIENTE]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '201': { description: Concedido }
+        '409': { $ref: '#/components/responses/Problema' }
+  /consentimentos/{consentimentoId}:
+    parameters:
+      - { name: consentimentoId, in: path, required: true, schema: { type: string } }
+    put:
+      tags: [Consentimento]
+      operationId: renovarConsentimento
+      x-roles: [PACIENTE]
+      requestBody: { $ref: '#/components/requestBodies/Json' }
+      responses:
+        '200': { description: Renovado }
+    delete:
+      tags: [Consentimento]
+      operationId: revogarConsentimento
+      x-roles: [PACIENTE]
+      responses:
+        '204': { description: Revogado }
+  /auditoria/prontuarios/{prontuarioId}:
+    get:
+      tags: [Auditoria]
+      operationId: listarAuditoriaProntuario
+      x-roles: [PACIENTE, GESTOR]
+      parameters:
+        - { name: prontuarioId, in: path, required: true, schema: { type: string } }
+        - { name: dataInicio, in: query, required: false, schema: { type: string, format: date-time } }
+        - { name: dataFim, in: query, required: false, schema: { type: string, format: date-time } }
+      responses:
+        '200': { description: Acessos }
+        '403': { $ref: '#/components/responses/Problema' }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  requestBodies:
+    Json:
+      required: true
+      description: Repassado sem alteração ao serviço de destino (schema no contrato do serviço)
+      content:
+        application/json:
+          schema: { type: object }
+  responses:
+    Problema:
+      description: Erro (RFC 9457)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problema' }
+  schemas:
+    Usuario:
+      type: object
+      required: [id, nome, roles]
+      properties:
+        id: { type: string, example: usr-atendente-07 }
+        nome: { type: string, example: Carla Mendes }
+        roles: { type: array, items: { type: string, enum: [PACIENTE, ATENDENTE, PROFISSIONAL, GESTOR] } }
+    Unidade:
+      type: object
+      required: [id, nome, tipo, latitude, longitude]
+      properties:
+        id: { type: string }
+        nome: { type: string }
+        tipo: { type: string, enum: [UBS, UPA] }
+        latitude: { type: number }
+        longitude: { type: number }
+    VisaoAgregada:
+      type: object
+      required: [unidadeId, totalPresente, totalACaminho, tempoMedioEsperaMin, nivelCongestionamento]
+      properties:
+        unidadeId: { type: string }
+        totalPresente: { type: integer }
+        totalACaminho: { type: integer }
+        tempoMedioEsperaMin: { type: integer }
+        nivelCongestionamento: { type: string, enum: [BAIXO, MEDIO, ALTO] }
+        atualizadoEm: { type: string, format: date-time, nullable: true }
+    UnidadeProxima:
+      allOf:
+        - $ref: '#/components/schemas/Unidade'
+        - type: object
+          required: [distanciaKm]
+          properties:
+            distanciaKm: { type: number }
+            visaoAgregada: { type: object, allOf: [{ $ref: '#/components/schemas/VisaoAgregada' }], nullable: true }
+    RegistroFila:
+      type: object
+      required: [id, pacienteId, unidadeId, prioridade, status, sintomas, horarioAviso]
+      properties:
+        id: { type: string }
+        pacienteId: { type: string }
+        pacienteNome: { type: string, nullable: true }
+        unidadeId: { type: string }
+        prioridade: { type: string, enum: [EMERGENCIA, MUITO_URGENTE, URGENTE, POUCO_URGENTE, NAO_URGENTE] }
+        status: { type: string, enum: [A_CAMINHO, AGUARDANDO, EM_ATENDIMENTO, FINALIZADO] }
+        sintomas: { type: array, items: { type: string } }
+        tempoEstimadoChegadaMin: { type: integer, nullable: true }
+        horarioAviso: { type: string, format: date-time }
+        horarioChegada: { type: string, format: date-time, nullable: true }
+        horarioInicioAtendimento: { type: string, format: date-time, nullable: true }
+        motivoSaida: { type: string, nullable: true }
+        prontuarioAutorizado: { type: boolean, nullable: true }
+    Prontuario:
+      type: object
+      properties:
+        id: { type: string }
+        pacienteId: { type: string }
+        alergias: { type: array, items: { type: string } }
+        medicacoes: { type: array, items: { type: string } }
+        historico: { type: array, items: { type: object } }
+    Consentimento:
+      type: object
+      properties:
+        id: { type: string }
+        pacienteId: { type: string }
+        unidadeId: { type: string }
+        ativo: { type: boolean }
+        valido: { type: boolean }
+        concedidoEm: { type: string, format: date-time }
+        expiraEm: { type: string, format: date-time }
+        revogadoEm: { type: string, format: date-time, nullable: true }
+    AggregatedData:
+      type: object
+      required: [unidade, fila, visaoAgregada, prontuario, meta]
+      properties:
+        unidade: { type: object, allOf: [{ $ref: '#/components/schemas/Unidade' }], nullable: true, description: "fonte: ms-fila-sql" }
+        fila:
+          type: array
+          nullable: true
+          description: "fonte: ms-fila-sql + ms-prontuario-mongo (prontuarioAutorizado)"
+          items: { $ref: '#/components/schemas/RegistroFila' }
+        visaoAgregada: { type: object, allOf: [{ $ref: '#/components/schemas/VisaoAgregada' }], nullable: true, description: "fonte: fn-visao-agregada" }
+        prontuario: { type: object, allOf: [{ $ref: '#/components/schemas/Prontuario' }], nullable: true, description: "fonte: ms-prontuario-mongo (só se pacienteId)" }
+        meta:
+          type: object
+          required: [correlationId, geradoEm, degraded, fontes, falhas, avisos]
+          properties:
+            correlationId: { type: string }
+            geradoEm: { type: string, format: date-time }
+            degraded: { type: boolean }
+            fontes:
+              type: array
+              items:
+                type: object
+                properties:
+                  nome: { type: string, enum: [ms-fila-sql, ms-prontuario-mongo, fn-visao-agregada] }
+                  status: { type: string, enum: [ok, falha] }
+                  duracaoMs: { type: integer }
+            falhas:
+              type: array
+              items:
+                type: object
+                properties:
+                  fonte: { type: string }
+                  motivo: { type: string, example: timeout }
+            avisos: { type: array, items: { type: string } }
+    Problema:
+      type: object
+      required: [title, status, codigo]
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+        codigo: { type: string }
+        correlationId: { type: string }
