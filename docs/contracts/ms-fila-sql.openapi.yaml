@@ -1,0 +1,481 @@
+openapi: 3.0.3
+info:
+  title: Open Prontuário — MS Fila (Azure SQL)
+  version: 1.0.0
+  description: |
+    Microserviço de **Unidades, Lotações e Fila**. Persistência em Azure SQL.
+    Publica os eventos de mudança de estado da fila no tópico `eventos-atendimento`
+    do Azure Service Bus (ver `asyncapi.yaml`).
+
+    Chamado somente pelo BFF (rotas de usuário) e pela Function / MS Prontuário
+    (rotas `/internal/**`). Todas as rotas exigem `X-Internal-Key`; as rotas de
+    usuário exigem também `X-User-Id` e `X-User-Roles` (ver `CONVENCOES.md`).
+  license: { name: Uso acadêmico - PUCPR }
+  contact:
+    name: Ana Paula Alves, Artur Bertoni, Bernardo Plottegher, Luiz Fernando Grenteski
+servers:
+  - url: http://localhost:8081
+    description: Local
+security:
+  - internalKey: []
+tags:
+  - name: Unidades
+  - name: Lotacoes
+  - name: Fila
+  - name: Interno
+paths:
+  /unidades:
+    get:
+      tags: [Unidades]
+      operationId: listarUnidades
+      summary: Lista todas as unidades de saúde
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/UserRoles'
+        - name: tipo
+          in: query
+          required: false
+          schema: { $ref: '#/components/schemas/TipoUnidade' }
+      responses:
+        '200':
+          description: Unidades
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Unidade' } }
+        '401': { $ref: '#/components/responses/Problema' }
+    post:
+      tags: [Unidades]
+      operationId: criarUnidade
+      summary: Cadastra uma unidade de saúde (GESTOR)
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/UserRoles'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UnidadeRequest' }
+      responses:
+        '201':
+          description: Unidade criada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Unidade' }
+        '400': { $ref: '#/components/responses/Problema' }
+        '401': { $ref: '#/components/responses/Problema' }
+  /unidades/proximas:
+    get:
+      tags: [Unidades]
+      operationId: listarUnidadesProximas
+      summary: RF02 — Unidades dentro do raio, ordenadas por distância (Haversine)
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/UserRoles'
+        - { name: latitude, in: query, required: true, schema: { type: number, format: double, minimum: -90, maximum: 90 } }
+        - { name: longitude, in: query, required: true, schema: { type: number, format: double, minimum: -180, maximum: 180 } }
+        - { name: raioKm, in: query, required: false, schema: { type: integer, default: 20, minimum: 1, maximum: 100 } }
+      responses:
+        '200':
+          description: Unidades próximas
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/UnidadeComDistancia' } }
+        '400': { $ref: '#/components/responses/Problema' }
+        '401': { $ref: '#/components/responses/Problema' }
+  /unidades/minhas:
+    get:
+      tags: [Unidades]
+      operationId: listarMinhasUnidades
+      summary: RF07 — Unidades em que o usuário (X-User-Id) está lotado
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/UserRoles'
+      responses:
+        '200':
+          description: Unidades do usuário
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Unidade' } }
+        '401': { $ref: '#/components/responses/Problema' }
+  /unidades/{unidadeId}:
+    parameters:
+      - $ref: '#/components/parameters/UnidadeId'
+      - $ref: '#/components/parameters/UserId'
+      - $ref: '#/components/parameters/UserRoles'
+    get:
+      tags: [Unidades]
+      operationId: buscarUnidade
+      summary: Detalha uma unidade
+      responses:
+        '200':
+          description: Unidade
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Unidade' }
+        '404': { $ref: '#/components/responses/Problema' }
+    put:
+      tags: [Unidades]
+      operationId: atualizarUnidade
+      summary: Atualiza uma unidade (GESTOR)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UnidadeRequest' }
+      responses:
+        '200':
+          description: Unidade atualizada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Unidade' }
+        '400': { $ref: '#/components/responses/Problema' }
+        '404': { $ref: '#/components/responses/Problema' }
+    delete:
+      tags: [Unidades]
+      operationId: removerUnidade
+      summary: Remove uma unidade sem registros de fila nem lotações (GESTOR)
+      responses:
+        '204': { description: Removida }
+        '404': { $ref: '#/components/responses/Problema' }
+        '409':
+          description: "Unidade em uso (codigo UNIDADE_EM_USO)"
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problema' }
+  /lotacoes:
+    get:
+      tags: [Lotacoes]
+      operationId: listarLotacoes
+      summary: Lista lotações de uma unidade (GESTOR)
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/UserRoles'
+        - { name: unidadeId, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Lotações
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Lotacao' } }
+    post:
+      tags: [Lotacoes]
+      operationId: criarLotacao
+      summary: Vincula um profissional a uma unidade (GESTOR)
+      parameters:
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/UserRoles'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LotacaoRequest' }
+      responses:
+        '201':
+          description: Lotação criada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Lotacao' }
+        '400': { $ref: '#/components/responses/Problema' }
+        '404': { $ref: '#/components/responses/Problema' }
+        '409':
+          description: "Lotação já existe (codigo LOTACAO_DUPLICADA)"
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problema' }
+  /lotacoes/{lotacaoId}:
+    delete:
+      tags: [Lotacoes]
+      operationId: removerLotacao
+      summary: Remove o vínculo (GESTOR)
+      parameters:
+        - { name: lotacaoId, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/UserRoles'
+      responses:
+        '204': { description: Removida }
+        '404': { $ref: '#/components/responses/Problema' }
+  /fila/{id}:
+    get:
+      tags: [Fila]
+      operationId: listarFilaPorPrioridade
+      summary: RF08/RF09 — Fila ativa da unidade ordenada por prioridade (usuário lotado)
+      parameters:
+        - { name: id, in: path, required: true, description: "ID da **unidade** (unidadeId)", schema: { type: string, example: upa-01 } }
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/UserRoles'
+        - { name: status, in: query, required: false, schema: { $ref: '#/components/schemas/StatusFila' } }
+      responses:
+        '200':
+          description: Fila (sem FINALIZADO)
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/RegistroFila' } }
+        '401': { $ref: '#/components/responses/Problema' }
+        '403': { $ref: '#/components/responses/Problema' }
+        '404': { $ref: '#/components/responses/Problema' }
+    delete:
+      tags: [Fila]
+      operationId: removerDaFila
+      summary: RF14 — Encerra o registro (→ FINALIZADO, sem apagar); publica PACIENTE_REMOVIDO
+      parameters:
+        - { name: id, in: path, required: true, description: "ID do **registro** de fila (registroId)", schema: { type: string } }
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/UserRoles'
+        - { name: motivo, in: query, required: true, schema: { $ref: '#/components/schemas/MotivoSaida' } }
+      responses:
+        '204': { description: Registro encerrado }
+        '400': { $ref: '#/components/responses/Problema' }
+        '403': { $ref: '#/components/responses/Problema' }
+        '404': { $ref: '#/components/responses/Problema' }
+        '409': { $ref: '#/components/responses/Problema' }
+  /fila/{unidadeId}/aviso-chegada:
+    post:
+      tags: [Fila]
+      operationId: avisarChegada
+      summary: RF03/RF04 — Paciente (X-User-Id) avisa que está a caminho; publica PACIENTE_A_CAMINHO
+      description: |
+        Faz upsert do paciente (`X-User-Id`, `X-User-Name`), classifica a prioridade
+        preliminar pelos sintomas, cria o registro `A_CAMINHO` e publica o evento.
+        O consentimento (`autorizarProntuario`) é orquestrado pelo BFF no MS Prontuário.
+      parameters:
+        - $ref: '#/components/parameters/UnidadeId'
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/UserRoles'
+        - { name: X-User-Name, in: header, required: false, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AvisoChegadaRequest' }
+      responses:
+        '201':
+          description: Registro criado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RegistroFila' }
+        '400': { $ref: '#/components/responses/Problema' }
+        '404': { $ref: '#/components/responses/Problema' }
+        '409':
+          description: "Registro ativo duplicado (REGISTRO_ATIVO_DUPLICADO)"
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problema' }
+  /fila/{registroId}/confirmar-chegada:
+    post:
+      tags: [Fila]
+      operationId: confirmarChegada
+      summary: RF10 — A_CAMINHO → AGUARDANDO; publica PACIENTE_CHEGOU
+      parameters:
+        - $ref: '#/components/parameters/RegistroId'
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/UserRoles'
+      responses:
+        '200':
+          description: Chegada confirmada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RegistroFila' }
+        '403': { $ref: '#/components/responses/Problema' }
+        '404': { $ref: '#/components/responses/Problema' }
+        '409': { $ref: '#/components/responses/Problema' }
+  /fila/{registroId}/prioridade:
+    patch:
+      tags: [Fila]
+      operationId: alterarPrioridade
+      summary: RF11 — Altera a prioridade (A_CAMINHO/AGUARDANDO); publica PRIORIDADE_ALTERADA
+      parameters:
+        - $ref: '#/components/parameters/RegistroId'
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/UserRoles'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AlterarPrioridadeRequest' }
+      responses:
+        '200':
+          description: Prioridade alterada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RegistroFila' }
+        '400': { $ref: '#/components/responses/Problema' }
+        '403': { $ref: '#/components/responses/Problema' }
+        '404': { $ref: '#/components/responses/Problema' }
+        '409': { $ref: '#/components/responses/Problema' }
+  /fila/{registroId}/iniciar-atendimento:
+    post:
+      tags: [Fila]
+      operationId: iniciarAtendimento
+      summary: RF13 — AGUARDANDO → EM_ATENDIMENTO; publica ATENDIMENTO_INICIADO
+      parameters:
+        - $ref: '#/components/parameters/RegistroId'
+        - $ref: '#/components/parameters/UserId'
+        - $ref: '#/components/parameters/UserRoles'
+      responses:
+        '200':
+          description: Atendimento iniciado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RegistroFila' }
+        '403': { $ref: '#/components/responses/Problema' }
+        '404': { $ref: '#/components/responses/Problema' }
+        '409': { $ref: '#/components/responses/Problema' }
+
+  /internal/fila/{unidadeId}/snapshot:
+    get:
+      tags: [Interno]
+      operationId: snapshotFila
+      summary: Estado para recálculo da visão agregada (usado pela Function)
+      description: Registros com status ≠ FINALIZADO **ou** com `horarioInicioAtendimento` nas últimas 2 horas.
+      parameters:
+        - $ref: '#/components/parameters/UnidadeId'
+      responses:
+        '200':
+          description: Snapshot
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/RegistroFilaSnapshot' } }
+        '401': { $ref: '#/components/responses/Problema' }
+  /internal/lotacoes:
+    get:
+      tags: [Interno]
+      operationId: listarLotacoesDoUsuario
+      summary: Lotações de um usuário (usado pelo MS Prontuário)
+      parameters:
+        - { name: usuarioId, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Lotações
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Lotacao' } }
+  /internal/lotacoes/verificar:
+    get:
+      tags: [Interno]
+      operationId: verificarLotacao
+      summary: Verifica se o usuário está lotado na unidade (usado pelo MS Prontuário)
+      parameters:
+        - { name: usuarioId, in: query, required: true, schema: { type: string } }
+        - { name: unidadeId, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Resultado
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [lotado]
+                properties:
+                  lotado: { type: boolean }
+components:
+  securitySchemes:
+    internalKey:
+      type: apiKey
+      in: header
+      name: X-Internal-Key
+  parameters:
+    UnidadeId: { name: unidadeId, in: path, required: true, schema: { type: string, example: upa-01 } }
+    RegistroId: { name: registroId, in: path, required: true, schema: { type: string } }
+    UserId: { name: X-User-Id, in: header, required: true, schema: { type: string, example: usr-atendente-07 } }
+    UserRoles: { name: X-User-Roles, in: header, required: true, schema: { type: string, example: ATENDENTE } }
+  responses:
+    Problema:
+      description: Erro (RFC 9457)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problema' }
+  schemas:
+    Prioridade: { type: string, enum: [EMERGENCIA, MUITO_URGENTE, URGENTE, POUCO_URGENTE, NAO_URGENTE] }
+    StatusFila: { type: string, enum: [A_CAMINHO, AGUARDANDO, EM_ATENDIMENTO, FINALIZADO] }
+    MotivoSaida: { type: string, enum: [ATENDIDO, DESISTENCIA, ENCAMINHADO] }
+    TipoUnidade: { type: string, enum: [UBS, UPA] }
+    PerfilUsuario: { type: string, enum: [PACIENTE, ATENDENTE, PROFISSIONAL, GESTOR] }
+    Unidade:
+      type: object
+      required: [id, nome, tipo, latitude, longitude]
+      properties:
+        id: { type: string, example: upa-01 }
+        nome: { type: string, example: UPA Boa Vista }
+        tipo: { $ref: '#/components/schemas/TipoUnidade' }
+        latitude: { type: number, format: double, example: -25.3866 }
+        longitude: { type: number, format: double, example: -49.2346 }
+    UnidadeComDistancia:
+      allOf:
+        - $ref: '#/components/schemas/Unidade'
+        - type: object
+          required: [distanciaKm]
+          properties:
+            distanciaKm: { type: number, format: double, example: 3.2 }
+    UnidadeRequest:
+      type: object
+      required: [nome, tipo, latitude, longitude]
+      properties:
+        nome: { type: string, minLength: 3, maxLength: 120 }
+        tipo: { $ref: '#/components/schemas/TipoUnidade' }
+        latitude: { type: number, format: double, minimum: -90, maximum: 90 }
+        longitude: { type: number, format: double, minimum: -180, maximum: 180 }
+    Lotacao:
+      type: object
+      required: [id, usuarioId, unidadeId, perfil]
+      properties:
+        id: { type: string }
+        usuarioId: { type: string }
+        unidadeId: { type: string }
+        perfil: { $ref: '#/components/schemas/PerfilUsuario' }
+    LotacaoRequest:
+      type: object
+      required: [usuarioId, unidadeId, perfil]
+      properties:
+        usuarioId: { type: string }
+        unidadeId: { type: string }
+        perfil: { $ref: '#/components/schemas/PerfilUsuario' }
+    AvisoChegadaRequest:
+      type: object
+      required: [sintomas]
+      properties:
+        sintomas: { type: array, minItems: 1, maxItems: 20, items: { type: string, minLength: 2, maxLength: 120 } }
+        tempoEstimadoChegadaMin: { type: integer, minimum: 0, maximum: 600 }
+    AlterarPrioridadeRequest:
+      type: object
+      required: [prioridade]
+      properties:
+        prioridade: { $ref: '#/components/schemas/Prioridade' }
+        justificativa: { type: string, maxLength: 500 }
+    RegistroFila:
+      type: object
+      required: [id, pacienteId, unidadeId, prioridade, status, sintomas, horarioAviso]
+      properties:
+        id: { type: string }
+        pacienteId: { type: string, example: pac-101 }
+        pacienteNome: { type: string, nullable: true, example: João Pereira }
+        unidadeId: { type: string, example: upa-01 }
+        prioridade: { $ref: '#/components/schemas/Prioridade' }
+        status: { $ref: '#/components/schemas/StatusFila' }
+        sintomas: { type: array, items: { type: string } }
+        tempoEstimadoChegadaMin: { type: integer, nullable: true }
+        horarioAviso: { type: string, format: date-time }
+        horarioChegada: { type: string, format: date-time, nullable: true }
+        horarioInicioAtendimento: { type: string, format: date-time, nullable: true }
+        motivoSaida: { type: string, enum: [ATENDIDO, DESISTENCIA, ENCAMINHADO], nullable: true }
+    RegistroFilaSnapshot:
+      type: object
+      required: [id, unidadeId, status, prioridade, horarioAviso]
+      properties:
+        id: { type: string }
+        unidadeId: { type: string }
+        status: { $ref: '#/components/schemas/StatusFila' }
+        prioridade: { $ref: '#/components/schemas/Prioridade' }
+        horarioAviso: { type: string, format: date-time }
+        horarioChegada: { type: string, format: date-time, nullable: true }
+        horarioInicioAtendimento: { type: string, format: date-time, nullable: true }
+    Problema:
+      type: object
+      required: [title, status, codigo]
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+        codigo: { type: string, example: TRANSICAO_INVALIDA }
+        correlationId: { type: string }
