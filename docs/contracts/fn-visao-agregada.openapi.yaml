@@ -1,0 +1,111 @@
+openapi: 3.0.3
+info:
+  title: Open Prontuário — Function Visão Agregada (HTTP Trigger)
+  version: 1.0.0
+  description: |
+    Azure Function (Java 17) com três gatilhos:
+
+    - **Service Bus Trigger** `EventoFilaFunction` — tópico `eventos-atendimento`,
+      subscription `agregador`: recalcula a visão agregada da unidade a partir do
+      snapshot do MS Fila (idempotente, ver `asyncapi.yaml`).
+    - **Service Bus Trigger** `EventoRejeitadoFunction` — DLQ da subscription:
+      grava em `eventos_rejeitados` e emite telemetria `EventoRejeitado`.
+    - **HTTP Trigger** (este documento) — leitura da visão agregada **enriquecida**
+      com `nivelCongestionamento`.
+
+    HTTP com `authLevel = ANONYMOUS` no runtime e verificação de `X-Internal-Key`
+    no código (rejeita com 401). Consumida pelo BFF.
+  license: { name: Uso acadêmico - PUCPR }
+  contact:
+    name: Ana Paula Alves, Artur Bertoni, Bernardo Plottegher, Luiz Fernando Grenteski
+servers:
+  - url: http://localhost:7071/api
+    description: Local (func host / container)
+security:
+  - internalKey: []
+paths:
+  /visao-agregada/{unidadeId}:
+    get:
+      operationId: consultarVisaoAgregada
+      summary: RF18 — Visão agregada de uma unidade
+      description: |
+        Se a unidade ainda não teve eventos processados, devolve 200 com contadores
+        zerados, `nivelCongestionamento = BAIXO` e `atualizadoEm = null`.
+      parameters:
+        - { name: unidadeId, in: path, required: true, schema: { type: string, example: upa-01 } }
+      responses:
+        '200':
+          description: Visão agregada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VisaoAgregada' }
+        '401':
+          description: X-Internal-Key ausente ou inválida
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problema' }
+  /visao-agregada:
+    get:
+      operationId: consultarVisoesAgregadas
+      summary: Visões agregadas de várias unidades (usado pelo BFF em "unidades próximas")
+      parameters:
+        - name: unidadeIds
+          in: query
+          required: true
+          description: IDs separados por vírgula (máx. 50)
+          schema: { type: string, example: "upa-01,upa-02" }
+      responses:
+        '200':
+          description: Uma entrada por unidade pedida, na mesma ordem
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/VisaoAgregada' } }
+        '400':
+          description: Parâmetro inválido
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problema' }
+        '401':
+          description: X-Internal-Key ausente ou inválida
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problema' }
+  /health:
+    get:
+      operationId: health
+      summary: Health check (sem X-Internal-Key)
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: UP }
+components:
+  securitySchemes:
+    internalKey: { type: apiKey, in: header, name: X-Internal-Key }
+  schemas:
+    VisaoAgregada:
+      type: object
+      required: [unidadeId, totalPresente, totalACaminho, tempoMedioEsperaMin, nivelCongestionamento]
+      properties:
+        unidadeId: { type: string, example: upa-01 }
+        totalPresente: { type: integer, minimum: 0, description: "registros AGUARDANDO" }
+        totalACaminho: { type: integer, minimum: 0, description: "registros A_CAMINHO" }
+        tempoMedioEsperaMin: { type: integer, minimum: 0 }
+        nivelCongestionamento: { type: string, enum: [BAIXO, MEDIO, ALTO] }
+        atualizadoEm: { type: string, format: date-time, nullable: true }
+        ultimoEventoId: { type: string, nullable: true }
+    Problema:
+      type: object
+      required: [title, status, codigo]
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        codigo: { type: string }
+        correlationId: { type: string }
