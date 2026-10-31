@@ -1,0 +1,149 @@
+# Sobe o Open Prontuário inteiro localmente.
+#   cp .env.example .env && docker compose up --build -d
+# Os repositórios dos serviços devem estar em pastas irmãs desta (../open-prontuario-*).
+#
+# Memória: o Docker Desktop precisa de ~4 GB. SQL Server e o runtime do Functions
+# só existem para amd64 e rodam emulados em Macs Apple Silicon (mais lentos para subir).
+name: open-prontuario
+
+x-internal: &internal
+  INTERNAL_API_KEY: ${INTERNAL_API_KEY:?defina INTERNAL_API_KEY no .env}
+
+x-servicebus: &servicebus
+  SERVICEBUS_CONNECTION_STRING: "Endpoint=sb://servicebus-emulator;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;"
+  SERVICEBUS_TOPIC: eventos-atendimento
+
+services:
+  # ---------- Infraestrutura (emuladores locais dos serviços Azure / Atlas) ----------
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?defina MSSQL_SA_PASSWORD no .env}
+      MSSQL_MEMORY_LIMIT_MB: "1024"
+    ports: ["1433:1433"]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' -b -o /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 40s
+
+  mssql-init:
+    # Cria o database do MS Fila (o Flyway cria as tabelas, mas não o database).
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64
+    depends_on:
+      mssql: { condition: service_healthy }
+    environment:
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD}
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - /opt/mssql-tools18/bin/sqlcmd -C -S mssql -U sa -P "$$MSSQL_SA_PASSWORD" -b -Q "IF DB_ID('openprontuario') IS NULL CREATE DATABASE openprontuario"
+    restart: "no"
+
+  servicebus-emulator:
+    image: mcr.microsoft.com/azure-messaging/servicebus-emulator:latest
+    depends_on:
+      mssql: { condition: service_healthy }
+    environment:
+      SQL_SERVER: mssql
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD}
+      ACCEPT_EULA: "Y"
+      SQL_WAIT_INTERVAL: "5"
+    volumes:
+      - ./servicebus/Config.json:/ServiceBus_Emulator/ConfigFiles/Config.json:ro
+    ports: ["5672:5672", "5300:5300"]
+
+  mongo:
+    image: mongo:7
+    ports: ["27017:27017"]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  azurite:
+    # Storage exigido pelo runtime do Azure Functions para gatilhos não-HTTP.
+    image: mcr.microsoft.com/azure-storage/azurite
+    command: azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck --loose
+    ports: ["10000:10000", "10001:10001", "10002:10002"]
+
+  # ---------- Microserviços ----------
+  ms-fila-sql:
+    build: ../open-prontuario-ms-fila-sql
+    depends_on:
+      mssql-init: { condition: service_completed_successfully }
+      servicebus-emulator: { condition: service_started }
+    environment:
+      <<: [*internal, *servicebus]
+      PORT: "8081"
+      DB_URL: "jdbc:sqlserver://mssql:1433;databaseName=openprontuario;encrypt=true;trustServerCertificate=true"
+      DB_USER: sa
+      DB_PASSWORD: ${MSSQL_SA_PASSWORD}
+      JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75"
+    mem_limit: 512m
+    ports: ["8081:8081"]
+
+  ms-prontuario-mongo:
+    build: ../open-prontuario-ms-prontuario-mongo
+    depends_on:
+      mongo: { condition: service_healthy }
+    environment:
+      <<: *internal
+      PORT: "8082"
+      MONGODB_URI: mongodb://mongo:27017
+      MONGODB_DATABASE: prontuario
+      MS_FILA_URL: http://ms-fila-sql:8081
+      JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75"
+    mem_limit: 512m
+    ports: ["8082:8082"]
+
+  fn-visao-agregada:
+    build: ../open-prontuario-fn-visao-agregada
+    platform: linux/amd64
+    depends_on:
+      mongo: { condition: service_healthy }
+      azurite: { condition: service_started }
+      servicebus-emulator: { condition: service_started }
+    environment:
+      <<: *internal
+      ServiceBusConnection: "Endpoint=sb://servicebus-emulator;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;"
+      SERVICEBUS_TOPIC: eventos-atendimento
+      SERVICEBUS_SUBSCRIPTION: agregador
+      MONGODB_URI: mongodb://mongo:27017
+      MONGODB_DATABASE: visao
+      MS_FILA_URL: http://ms-fila-sql:8081
+      # Chave pública e documentada do Azurite (não é segredo).
+      AzureWebJobsStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1;TableEndpoint=http://azurite:10002/devstoreaccount1;"
+      FUNCTIONS_WORKER_RUNTIME: java
+    mem_limit: 768m
+    ports: ["7071:80"]
+
+  # ---------- BFF e Frontend ----------
+  bff:
+    build: ../open-prontuario-bff
+    depends_on: [ms-fila-sql, ms-prontuario-mongo, fn-visao-agregada]
+    environment:
+      <<: *internal
+      PORT: "3000"
+      NODE_ENV: development
+      AUTH_MODE: dev
+      JWT_SECRET: ${JWT_SECRET:?defina JWT_SECRET no .env}
+      MS_FILA_URL: http://ms-fila-sql:8081
+      MS_PRONTUARIO_URL: http://ms-prontuario-mongo:8082
+      FN_VISAO_URL: http://fn-visao-agregada:80
+      CORS_ORIGINS: http://localhost:8080,http://localhost:5173
+      UPSTREAM_TIMEOUT_MS: "3000"
+    ports: ["3000:3000"]
+
+  frontend:
+    build:
+      context: ../open-prontuario-frontend
+      args:
+        VITE_API_BASE_URL: http://localhost:3000/api
+        VITE_AUTH_MODE: dev
+    depends_on: [bff]
+    ports: ["8080:8080"]
