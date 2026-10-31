@@ -44,6 +44,8 @@ resource operacoes 'Microsoft.ApiManagement/service/apis/operations@2023-09-01-p
 resource politica 'Microsoft.ApiManagement/service/apis/policies@2023-09-01-preview' = {
   parent: api
   name: 'policy'
+  // Escritas paralelas na mesma API devolvem PreconditionFailed (ETag).
+  dependsOn: [operacoes]
   properties: {
     format: 'rawxml'
     // Strings multilinha do Bicep não interpolam; o placeholder é trocado aqui.

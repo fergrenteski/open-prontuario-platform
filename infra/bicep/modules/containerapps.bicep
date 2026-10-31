@@ -155,7 +155,7 @@ resource bff 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'FN_VISAO_URL', value: functionUrl }
             { name: 'INTERNAL_API_KEY', secretRef: 'internal-key' }
             { name: 'CORS_ORIGINS', value: corsOrigins }
-            { name: 'UPSTREAM_TIMEOUT_MS', value: '10000' }
+            { name: 'UPSTREAM_TIMEOUT_MS', value: '45000' } // cobre a partida a frio (~35 s) dos serviços Java
           ]
         }
       ]

@@ -24,26 +24,29 @@ Todos os integrantes participam da documentação, da revisão de código e do v
 
 # Links da entrega {.unnumbered}
 
-> Preencha após o deploy (ver `docs/DEPLOY.md`). Os links de nuvem são saídas do `az deployment group create` (`outputs`).
+> Links de nuvem gerados por `./scripts/azure.sh subir` (consulte com `./scripts/azure.sh status`). Tudo escala a zero: o primeiro acesso depois de um tempo parado leva até ~1 min.
 
 | Artefato | Link |
 |---|---|
-| GitHub — Microfrontend | `<PREENCHER>` (https://github.com/fergrenteski/open-prontuario-frontend) |
-| GitHub — BFF | `<PREENCHER>` (https://github.com/fergrenteski/open-prontuario-bff) |
-| GitHub — Microserviço MongoDB | `<PREENCHER>` (https://github.com/fergrenteski/open-prontuario-ms-prontuario-mongo) |
-| GitHub — Microserviço Azure SQL | `<PREENCHER>` (https://github.com/fergrenteski/open-prontuario-ms-fila-sql) |
-| GitHub — Azure Function | `<PREENCHER>` (https://github.com/fergrenteski/open-prontuario-fn-visao-agregada) |
-| GitHub — Plataforma (docs, compose, Bicep) | `<PREENCHER>` (https://github.com/fergrenteski/open-prontuario-platform) |
-| Docker Hub — BFF | `<PREENCHER>` (https://hub.docker.com/r/<usuario>/pjbl-bff) |
-| Docker Hub — MS Fila | `<PREENCHER>` (https://hub.docker.com/r/<usuario>/pjbl-ms-fila-sql) |
-| Docker Hub — MS Prontuário | `<PREENCHER>` (https://hub.docker.com/r/<usuario>/pjbl-ms-prontuario-mongo) |
-| Swagger — BFF | `<PREENCHER>` (output `bffSwaggerUrl`) |
-| Swagger — MS Fila | `<PREENCHER>` (output `msFilaSwaggerUrl`) |
-| Swagger — MS Prontuário | `<PREENCHER>` (output `msProntuarioSwaggerUrl`) |
-| OpenAPI — Function (HTTP Trigger) | `<PREENCHER>` (`docs/contracts/fn-visao-agregada.openapi.yaml` no GitHub) |
-| Eventos (AsyncAPI) | `<PREENCHER>` (`docs/contracts/asyncapi.yaml` no GitHub / AsyncAPI Studio) |
-| Frontend | `<PREENCHER>` (output `frontendUrl`) |
-| API Gateway | `<PREENCHER>` (output `apiGatewayUrl`) |
+| GitHub — Microfrontend | https://github.com/fergrenteski/open-prontuario-frontend |
+| GitHub — BFF | https://github.com/fergrenteski/open-prontuario-bff |
+| GitHub — Microserviço MongoDB | https://github.com/fergrenteski/open-prontuario-ms-prontuario-mongo |
+| GitHub — Microserviço Azure SQL | https://github.com/fergrenteski/open-prontuario-ms-fila-sql |
+| GitHub — Azure Function | https://github.com/fergrenteski/open-prontuario-fn-visao-agregada |
+| GitHub — Plataforma (docs, compose, Bicep) | https://github.com/fergrenteski/open-prontuario-platform |
+| Docker Hub — BFF | https://hub.docker.com/r/fergrenteski/pjbl-bff |
+| Docker Hub — MS Fila | https://hub.docker.com/r/fergrenteski/pjbl-ms-fila-sql |
+| Docker Hub — MS Prontuário | https://hub.docker.com/r/fergrenteski/pjbl-ms-prontuario-mongo |
+| Docker Hub — Function | https://hub.docker.com/r/fergrenteski/pjbl-fn-visao-agregada |
+| Docker Hub — Frontend | https://hub.docker.com/r/fergrenteski/pjbl-frontend |
+| Swagger — BFF | https://ca-bff.gentletree-a28fd1cb.brazilsouth.azurecontainerapps.io/api/docs |
+| Swagger — MS Fila | https://ca-ms-fila-sql.gentletree-a28fd1cb.brazilsouth.azurecontainerapps.io/swagger-ui.html |
+| Swagger — MS Prontuário | https://ca-ms-prontuario-mongo.gentletree-a28fd1cb.brazilsouth.azurecontainerapps.io/swagger-ui.html |
+| OpenAPI — Function (HTTP Trigger) | https://github.com/fergrenteski/open-prontuario-platform/blob/main/docs/contracts/fn-visao-agregada.openapi.yaml |
+| Eventos (AsyncAPI) | https://github.com/fergrenteski/open-prontuario-platform/blob/main/docs/contracts/asyncapi.yaml |
+| Frontend | https://lemon-meadow-08591770f.1.azurestaticapps.net |
+| API Gateway | https://apim-openpront-kuuqj6ka4e67k.azure-api.net/api (exige o header `Ocp-Apim-Subscription-Key`; sem ele, 401) |
+| Azure Function (HTTP Trigger) | https://func-openpront-kuuqj6ka4e67k.azurewebsites.net/api/health |
 | Vídeo no YouTube (não listado) | `<PREENCHER>` |
 
 \newpage
@@ -350,7 +353,7 @@ Uma mensagem que falha 5 vezes (JSON inválido ou MS Fila indisponível) vai par
 | BFF | Azure Container Apps | Consumption, escala 0–3 | `<usuario>/pjbl-bff` |
 | MS Fila | Azure Container Apps | Consumption, escala 0–3 | `<usuario>/pjbl-ms-fila-sql` |
 | MS Prontuário | Azure Container Apps | Consumption, escala 0–3 | `<usuario>/pjbl-ms-prontuario-mongo` |
-| Function | Azure Functions | Linux Consumption (Y1), Java 17 | pacote `fn-visao-agregada` |
+| Function | Azure Functions | Flex Consumption (FC1), Java 17 | pacote `fn-visao-agregada` |
 | Mensageria | Azure Service Bus | Standard (tópicos) | `eventos-atendimento` |
 | Banco relacional | Azure SQL Database | oferta gratuita (serverless, auto-pause) | `openprontuario` |
 | Banco de documentos | MongoDB Atlas | M0 (free) | dbs `prontuario` e `visao` |

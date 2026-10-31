@@ -2,11 +2,11 @@
 title Implantação na Azure (e serviços externos)
 skinparam defaultTextAlignment center
 node "Navegador\n(desktop ou celular)" as nav
-node "GitHub" as gh {
-  artifact "Actions (CI)" as ci
+node "Máquina do grupo" as dev {
+  artifact "scripts/docker-publish.sh\nscripts/azure.sh" as ci
 }
 node "Docker Hub" as dh {
-  artifact "<user>/pjbl-bff\n<user>/pjbl-ms-fila-sql\n<user>/pjbl-ms-prontuario-mongo" as imgs
+  artifact "fergrenteski/pjbl-bff\nfergrenteski/pjbl-ms-fila-sql\nfergrenteski/pjbl-ms-prontuario-mongo" as imgs
 }
 rectangle "Resource group rg-openprontuario" {
   node "Static Web Apps (Free)" as swa {
@@ -18,7 +18,7 @@ rectangle "Resource group rg-openprontuario" {
     artifact "ca-ms-fila-sql" as cafila
     artifact "ca-ms-prontuario-mongo" as capront
   }
-  node "Functions (Linux Consumption Y1)" as func {
+  node "Functions (Flex Consumption FC1)" as func {
     artifact "fn-visao-agregada" as afn
   }
   queue "Service Bus Standard\neventos-atendimento / agregador / DLQ" as sb

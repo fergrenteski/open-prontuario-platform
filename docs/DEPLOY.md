@@ -11,6 +11,10 @@ Tudo em nuvem é ligado, testado e desligado pelo `scripts/azure.sh`:
 ```
 
 ```bash
+./scripts/azure.sh acordar    # tira os serviços da partida a frio: rode antes de apresentar
+```
+
+```bash
 ./scripts/azure.sh testar     # smoke test E2E (19 verificações) contra o API Gateway
 ```
 
@@ -26,7 +30,9 @@ Tudo em nuvem é ligado, testado e desligado pelo `scripts/azure.sh`:
 | Semanas sem usar | `./scripts/azure.sh desligar` | zero |
 | Precisa de novo | `./scripts/azure.sh subir` | ~20 min para ficar no ar |
 
-Parado, quase nada cobra: Container Apps e Functions escalam a zero, o API Management Consumption cobra por chamada, o Azure SQL usa a oferta gratuita com auto-pause e o Static Web Apps é Free. Por isso não existe "pausar": o único custo fixo é o Service Bus, que não pausa.
+Tudo escala a zero, então o primeiro acesso depois de um tempo parado leva até ~1 min (a tela mostra "Buscando…"). Antes de apresentar ou gravar o vídeo, rode `acordar`.
+
+Parado, quase nada cobra: Container Apps e Functions (Flex Consumption) escalam a zero, o API Management Consumption cobra por chamada, o Azure SQL usa a oferta gratuita com auto-pause e o Static Web Apps é Free. Por isso não existe "pausar": o único custo fixo é o Service Bus, que não pausa.
 
 Ao desligar e subir de novo:
 - as URLs do API Gateway e da Function **continuam iguais** (o nome vem do resource group);
@@ -65,6 +71,8 @@ cp .env.azure.example .env.azure
 Preencha `DOCKERHUB_USER`, `MONGODB_URI` e `APIM_EMAIL`. As senhas e chaves internas são geradas na primeira execução e guardadas no próprio `.env.azure`, que fica fora do git.
 
 ### 4. Subir
+
+Pré-requisitos: Azure CLI, Docker (o deploy do frontend roda num container), JDK 17 e Node 20+.
 
 ```bash
 az login

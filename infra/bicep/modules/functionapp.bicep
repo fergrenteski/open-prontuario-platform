@@ -1,4 +1,5 @@
-// Azure Functions (Linux, plano Consumption Y1, Java 17).
+// Azure Functions (Linux, plano Flex Consumption FC1, Java 17).
+// O Y1 (Linux Consumption) está sendo aposentado e tem cota zero no Azure for Students.
 param location string
 param nome string
 param storageName string
@@ -25,30 +26,44 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   }
 }
 
-resource plano 'Microsoft.Web/serverfarms@2023-12-01' = {
+// Container onde o Flex Consumption guarda o pacote publicado.
+resource pacotes 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  name: '${storage.name}/default/deploy'
+}
+
+resource plano 'Microsoft.Web/serverfarms@2024-04-01' = {
   name: 'plan-${nome}'
   location: location
-  sku: { name: 'Y1', tier: 'Dynamic' }
+  sku: { name: 'FC1', tier: 'FlexConsumption' }
   kind: 'functionapp'
   properties: { reserved: true }
 }
 
 var storageConnection = 'DefaultEndpointsProtocol=https;AccountName=${storage.name};AccountKey=${storage.listKeys().keys[0].value};EndpointSuffix=${environment().suffixes.storage}'
 
-resource app 'Microsoft.Web/sites@2023-12-01' = {
+resource app 'Microsoft.Web/sites@2024-04-01' = {
   name: nome
   location: location
   kind: 'functionapp,linux'
+  dependsOn: [pacotes]
   properties: {
     serverFarmId: plano.id
     httpsOnly: true
+    functionAppConfig: {
+      deployment: {
+        storage: {
+          type: 'blobContainer'
+          value: '${storage.properties.primaryEndpoints.blob}deploy'
+          authentication: { type: 'StorageAccountConnectionString', storageAccountConnectionStringName: 'AzureWebJobsStorage' }
+        }
+      }
+      scaleAndConcurrency: { maximumInstanceCount: 40, instanceMemoryMB: 2048 }
+      runtime: { name: 'java', version: '17' }
+    }
     siteConfig: {
-      linuxFxVersion: 'Java|17'
       minTlsVersion: '1.2'
       appSettings: [
         { name: 'AzureWebJobsStorage', value: storageConnection }
-        { name: 'FUNCTIONS_EXTENSION_VERSION', value: '~4' }
-        { name: 'FUNCTIONS_WORKER_RUNTIME', value: 'java' }
         { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsightsConnectionString }
         { name: 'ServiceBusConnection', value: listKeys('${sb.id}/AuthorizationRules/RootManageSharedAccessKey', '2022-10-01-preview').primaryConnectionString }
         { name: 'SERVICEBUS_TOPIC', value: 'eventos-atendimento' }
