@@ -11,8 +11,8 @@ Container_Boundary(ms, "MS Fila — Spring Boot") {
     Component(flt, "InternalKeyFilter, CorrelationIdFilter,\nRestExceptionHandler", "Spring Web", "RFC 9457")
   }
   Boundary(app, "application/<feature>/<caso-de-uso>") {
-    Component(ucfila, "fila: AvisarChegada, ConfirmarChegada,\nAlterarPrioridade, IniciarAtendimento,\nRemoverDaFila, ListarFila, SnapshotFila", "UseCases")
-    Component(ucuni, "unidade e lotacao: CRUD,\nListarProximas, ListarMinhas, VerificarLotacao", "UseCases")
+    Component(ucfila, "fila: AvisarChegada, ConfirmarChegada,\nAlterarPrioridade, IniciarAtendimento,\nRemoverDaFila, ListarFilaPorPrioridade,\nObterSnapshotFila", "UseCases")
+    Component(ucuni, "unidade e lotacao: CRUD,\nListarUnidadesProximas, ListarMinhasUnidades,\nVerificarLotacao, ListarLotacoesDoUsuario", "UseCases")
     Component(portas, "Portas", "interfaces", "~*Repository, EventPublisherPort")
   }
   Boundary(dom, "domain") {

@@ -10,7 +10,7 @@ Container_Boundary(ms, "MS Prontuário — Spring Boot") {
   }
   Boundary(app, "application/<feature>/<caso-de-uso>") {
     Component(ucp, "prontuario: ConsultarProntuario (fail-closed),\nConsultarProprio, Criar, Atualizar, Remover,\nRegistrarAtendimento", "UseCases")
-    Component(ucc, "consentimento: Conceder, Listar, Renovar,\nRevogar, ListarValidosPorUnidade\nauditoria: ListarAuditoria", "UseCases")
+    Component(ucc, "consentimento: Conceder, Listar, Renovar,\nRevogar,\nListarPacientesComConsentimentoValido\nauditoria: ListarAuditoria", "UseCases")
     Component(portas, "Portas", "interfaces", "ProntuarioRepository, AtendimentoRepository,\nConsentimentoRepository, LogAuditoriaRepository\n(append-only), LotacaoPort")
   }
   Boundary(dom, "domain") {
