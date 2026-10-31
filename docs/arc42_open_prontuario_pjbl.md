@@ -130,7 +130,7 @@ Rotas públicas são as do BFF (prefixo `/api`, atrás do gateway). A coluna "Se
 | RF08, RF09 | `GET /fila/{unidadeId}`, `GET /aggregated-data` | BFF + MS Fila + MS Prontuário | MS Fila `ListarFilaPorPrioridadeUseCase`; BFF marca `prontuarioAutorizado` |
 | RF10 | `POST /fila/{registroId}/confirmar-chegada` | MS Fila | `ConfirmarChegadaUseCase` |
 | RF11 | `PATCH /fila/{registroId}/prioridade` | MS Fila | `AlterarPrioridadeUseCase` |
-| RF12, RF15 | `GET /prontuarios/{pacienteId}?unidadeId=` | MS Prontuário (+ MS Fila p/ lotação) | `ConsultarProntuarioUseCase` |
+| RF12, RF15 | `GET /prontuarios/{pacienteId}` (query `unidadeId`) | MS Prontuário (+ MS Fila p/ lotação) | `ConsultarProntuarioUseCase` |
 | RF13 | `POST /fila/{registroId}/iniciar-atendimento` | MS Fila | `IniciarAtendimentoUseCase` |
 | RF14 | `DELETE /fila/{registroId}?motivo=` | MS Fila | `RemoverDaFilaUseCase` |
 | RF16 | `GET /auditoria/prontuarios/{prontuarioId}` | MS Prontuário | `ListarAuditoriaUseCase` |
@@ -338,7 +338,7 @@ Exemplo de resposta (abreviado):
 
 ## 6.5 Evento rejeitado
 
-Uma mensagem que falha 5 vezes (JSON inválido ou MS Fila indisponível) vai para `eventos-atendimento/Subscriptions/agregador/$DeadLetterQueue`. `EventoRejeitadoFunction` grava o corpo, o motivo e o `correlationId` em `eventos_rejeitados` e emite o log de telemetria `EventoRejeitado`, usado para alerta no Application Insights. Como a visão é recalculada a partir do estado, o próximo evento válido da unidade corrige os indicadores.
+Uma mensagem que falha 5 vezes (JSON inválido ou MS Fila indisponível) vai para a fila de mensagens mortas (DLQ) da subscription `agregador` do tópico `eventos-atendimento`. `EventoRejeitadoFunction` grava o corpo, o motivo e o `correlationId` em `eventos_rejeitados` e emite o log de telemetria `EventoRejeitado`, usado para alerta no Application Insights. Como a visão é recalculada a partir do estado, o próximo evento válido da unidade corrige os indicadores.
 
 \newpage
 

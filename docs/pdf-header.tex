@@ -1,0 +1,6 @@
+% Tabelas largas (matriz de rastreabilidade, ADRs) cabem na página em fonte menor.
+\usepackage{etoolbox}
+\AtBeginEnvironment{longtable}{\footnotesize}
+% Figuras ficam logo abaixo do título da seção (sem flutuar para outra página).
+\usepackage{float}
+\floatplacement{figure}{H}

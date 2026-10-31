@@ -90,10 +90,10 @@ O `authMode` é `dev`, com as personas de demonstração (João, Maria, Carla, D
 
 1. Preencha a seção "Links da entrega" do `docs/arc42_open_prontuario_pjbl.md` com a saída de `status`.
 2. Tire os prints de `docs/prints/CHECKLIST.md` e grave o vídeo seguindo `docs/video/ROTEIRO.md`.
-3. Gere o PDF do arc42:
+3. Preencha o link do vídeo no arc42 e gere o PDF (pandoc em Docker, sai em `docs/arc42_open_prontuario_pjbl.pdf`):
 
    ```bash
-   cd docs && docker run --rm -v "$PWD":/data pandoc/latex:3.6 arc42_open_prontuario_pjbl.md -o arc42_open_prontuario_pjbl.pdf --toc -V geometry:margin=2cm
+   make pdf
    ```
 
 No fim do semestre, rode `./scripts/azure.sh desligar` e apague o cluster no Atlas.

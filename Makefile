@@ -1,4 +1,4 @@
-.PHONY: up down logs ps e2e lint-contratos publish
+.PHONY: up down logs ps e2e lint-contratos publish pdf
 
 BFF_URL ?= http://localhost:3000/api
 
@@ -26,3 +26,8 @@ lint-contratos: ## Valida OpenAPI (Redocly) e AsyncAPI
 
 publish: ## make publish USER=<dockerhub-user> TAG=v1 (faça docker login antes)
 	./scripts/docker-publish.sh $(USER) $(TAG)
+
+pdf: ## Gera docs/arc42_open_prontuario_pjbl.pdf (pandoc em Docker)
+	cd docs && docker run --rm --platform linux/amd64 -v "$$PWD":/data pandoc/latex:3.6 \
+	  arc42_open_prontuario_pjbl.md -o arc42_open_prontuario_pjbl.pdf --toc --pdf-engine=xelatex \
+	  -H pdf-header.tex -V geometry:margin=1.5cm

@@ -101,4 +101,4 @@ Problemas encontrados no deploy e corrigidos:
 - Gatilho da DLQ contra o emulador (coberto por testes unitários).
 - Modo `entra` (Microsoft Entra ID) em nuvem: a demonstração usa `authMode=dev` com as personas.
 - `./scripts/azure.sh desligar` seguido de `subir` (apagar e recriar tudo) não foi exercitado para não derrubar o ambiente da entrega.
-- Geração do PDF (pandoc não instalado; comando com Docker em `DEPLOY.md`).
+- PDF do arc42 gerado com `make pdf` (29 páginas); falta só o link do vídeo.
