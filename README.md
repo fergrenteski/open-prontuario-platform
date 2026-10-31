@@ -58,12 +58,19 @@ Docker Compose · SQL Server 2022 · Azure Service Bus Emulator · MongoDB 7 · 
 Pré-requisitos: Docker Desktop com ~4 GB de memória e Node 20+. Clone os 6 repositórios **lado a lado** na mesma pasta.
 
 ```bash
-cp .env.example .env
-docker compose up --build -d
+make up
 ```
+
+Isso cria o `.env` com valores locais, constrói as 5 imagens e sobe tudo (bancos, Service Bus Emulator, serviços, BFF e frontend). Aguarde ~3 minutos e abra http://localhost:8080. Para conferir de ponta a ponta:
 
 ```bash
 make e2e
+```
+
+Para derrubar tudo e apagar os dados locais:
+
+```bash
+make down
 ```
 
 | Serviço | URL local |
@@ -78,7 +85,12 @@ Em Macs Apple Silicon, SQL Server e o runtime Java do Functions rodam emulados (
 
 ## Como rodar em nuvem
 
-Siga [`docs/DEPLOY.md`](docs/DEPLOY.md). A apresentação usa somente as URLs de nuvem (outputs do Bicep).
+```bash
+./scripts/azure.sh subir      # liga tudo
+./scripts/azure.sh desligar   # apaga tudo (custo zero)
+```
+
+Configuração inicial (Atlas, Docker Hub e `.env.azure`) e custos em [`docs/DEPLOY.md`](docs/DEPLOY.md). A apresentação usa somente as URLs de nuvem (`./scripts/azure.sh status`).
 
 ## Validações deste repositório
 
